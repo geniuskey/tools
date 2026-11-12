@@ -1,0 +1,10 @@
+{
+  "name": "tools.euiyun.com",
+  "short_name": "tools",
+  "description": "제대로 만든 웹 도구 모음",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121316",
+  "theme_color": "#121316",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

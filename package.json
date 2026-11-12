@@ -1,0 +1,31 @@
+{
+  "name": "tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "e2e": "tsx --test --test-concurrency=1 e2e/*.e2e.ts",
+    "deploy": "npm run build && wrangler pages deploy build --project-name tools --branch main"
+  },
+  "dependencies": {
+    "decimal.js": "^10.6.0"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.11",
+    "@sveltejs/kit": "^2.70.4",
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
+    "@types/node": "^26.6.6",
+    "playwright-core": "^1.65.0",
+    "svelte": "^5.57.3",
+    "svelte-check": "^4.7.8",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.8",
+    "wrangler": "4.158.0"
+  }
+}

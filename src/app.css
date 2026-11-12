@@ -1,0 +1,274 @@
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --surface-3: #e4e7ec;
+  --text: #17181c;
+  --muted: #5a616d;
+  --faint: #8a909b;
+  --border: #dfe2e7;
+  --border-strong: #c6cad2;
+  --accent: #2563eb;
+  --ok: #157f3c;
+  --bad: #c0261b;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.05), 0 1px 3px rgb(16 24 40 / 0.07);
+  --shadow-md: 0 4px 12px rgb(16 24 40 / 0.08), 0 1px 3px rgb(16 24 40 / 0.06);
+  --shadow-lg: 0 12px 32px rgb(16 24 40 / 0.16), 0 2px 6px rgb(16 24 40 / 0.08);
+  --font: -apple-system, BlinkMacSystemFont, 'Pretendard', 'Apple SD Gothic Neo', 'Malgun Gothic',
+    'Noto Sans KR', 'Segoe UI', system-ui, sans-serif;
+  --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* 도구마다 색 */
+  --c-calc: #e8590c;
+  --c-image: #6741d9;
+  --c-raffle: #d6336c;
+  --c-diff: #0c8599;
+  --c-rec: #e03131;
+  --c-data: #2f9e44;
+  --c-qr: #3b5bdb;
+  --c-timer: #b8860b;
+  --app: var(--accent);
+  --soft-mix: 11%;
+  --line-mix: 40%;
+  --app-soft: color-mix(in srgb, var(--app) var(--soft-mix), var(--surface));
+  --app-line: color-mix(in srgb, var(--app) var(--line-mix), var(--surface));
+  --on-app: #fff;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #121316;
+  --surface: #1b1d21;
+  --surface-2: #24272c;
+  --surface-3: #2f3339;
+  --text: #e9ebef;
+  --muted: #a2a8b3;
+  --faint: #747a85;
+  --border: #2e3238;
+  --border-strong: #42474f;
+  --accent: #7aa2ff;
+  --ok: #5ccf86;
+  --bad: #ff8a80;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 14px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 12px 36px rgb(0 0 0 / 0.6);
+  --c-calc: #ff8a3d;
+  --c-image: #9775fa;
+  --c-raffle: #f06595;
+  --c-diff: #3bc9db;
+  --c-rec: #ff6b6b;
+  --c-data: #69db7c;
+  --c-qr: #91a7ff;
+  --c-timer: #ffd43b;
+  --soft-mix: 20%;
+  --line-mix: 55%;
+  --on-app: #14151a;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #121316;
+    --surface: #1b1d21;
+    --surface-2: #24272c;
+    --surface-3: #2f3339;
+    --text: #e9ebef;
+    --muted: #a2a8b3;
+    --faint: #747a85;
+    --border: #2e3238;
+    --border-strong: #42474f;
+    --accent: #7aa2ff;
+    --ok: #5ccf86;
+    --bad: #ff8a80;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+    --shadow-md: 0 4px 14px rgb(0 0 0 / 0.45);
+    --shadow-lg: 0 12px 36px rgb(0 0 0 / 0.6);
+    --c-calc: #ff8a3d;
+    --c-image: #9775fa;
+    --c-raffle: #f06595;
+    --c-diff: #3bc9db;
+    --c-rec: #ff6b6b;
+    --c-data: #69db7c;
+    --c-qr: #91a7ff;
+    --c-timer: #ffd43b;
+    --soft-mix: 20%;
+    --line-mix: 55%;
+    --on-app: #14151a;
+    color-scheme: dark;
+  }
+}
+
+/* --app 을 바꾸는 요소에 붙인다. 사용자 정의 속성은 선언된 곳에서 계산되므로 파생 색을 여기서 다시 만든다. */
+.app-scope {
+  --app-soft: color-mix(in srgb, var(--app) var(--soft-mix), var(--surface));
+  --app-line: color-mix(in srgb, var(--app) var(--line-mix), var(--surface));
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--app);
+  outline-offset: 2px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+a {
+  color: inherit;
+}
+
+kbd {
+  font-family: var(--mono);
+  font-size: 0.78em;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* 공용 컨트롤 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 13.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn.primary {
+  background: var(--app);
+  border-color: var(--app);
+  color: var(--on-app);
+}
+.btn.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--app) 88%, #000);
+}
+.btn.ghost {
+  border-color: transparent;
+  background: transparent;
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.btn.sm {
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12.5px;
+}
+.btn.danger {
+  color: var(--bad);
+}
+
+.field {
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 13.5px;
+  min-width: 0;
+}
+textarea.field {
+  height: auto;
+  padding: 8px 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.seg {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--surface-3);
+  gap: 2px;
+}
+.seg button {
+  border: 0;
+  background: transparent;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.seg button[aria-pressed='true'],
+.seg button[aria-selected='true'] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

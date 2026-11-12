@@ -1,0 +1,7 @@
+node_modules
+.svelte-kit
+build
+.wrangler
+.env
+.DS_Store
+e2e/screenshots
