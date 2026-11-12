@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { dedupeText, eligible, maskName, parseParticipants, pick, randomInt, rangeText, remaining, resultsCsv, sampleText, type Prize } from '../src/lib/raffle/core';
+import { drumPose, reelCurve, reelNames, reelSteps } from '../src/lib/raffle/reel';
 
 test('명단 파싱', () => {
   const r = parseParticipants('이름\t부서\n김하늘\t개발팀\n\n이서연, 디자인팀 , 3년차\n박민준\n김하늘\t개발팀\n');
@@ -56,4 +57,58 @@ test('이름 가리기', () => {
   assert.equal(maskName('김하늘'), '김＊늘');
   assert.equal(maskName('남궁민수'), '남＊＊수');
   assert.equal(maskName('이솔'), '이＊');
+});
+
+test('릴: 속도 곡선', () => {
+  const curve = reelCurve();
+  assert.equal(curve(0), 0);
+  assert.equal(curve(-1), 0);
+  assert.equal(curve(1), 1);
+  assert.equal(curve(2), 1);
+  let prev = 0;
+  for (let i = 1; i <= 200; i++) {
+    const v = curve(i / 200);
+    assert.ok(v > prev, `뒤로 가지 않는다 (${i})`);
+    prev = v;
+  }
+  // 처음에는 가속하고, 중간이 가장 빠르고, 끝에서도 완전히 서지는 않는다
+  const speed = (u: number) => (curve(u + 0.005) - curve(u - 0.005)) / 0.01;
+  assert.ok(speed(0.01) < speed(0.1));
+  assert.ok(speed(0.1) > speed(0.5) && speed(0.5) > speed(0.9));
+  assert.ok(speed(0.99) > 0.1 && speed(0.99) < speed(0.1) / 5);
+  // 끝 속도를 줄이면 더 천천히 멈춘다
+  const slow = reelCurve(0.03);
+  assert.ok((1 - slow(0.99)) < 1 - curve(0.99));
+});
+
+test('릴: 지나가는 이름', () => {
+  assert.equal(reelSteps(0), 8);
+  assert.equal(reelSteps(2800), 29);
+  assert.ok(reelSteps(5200) > reelSteps(2800));
+
+  const pool = ['가', '나', '다', '라', '마'];
+  let n = 0;
+  const names = reelNames(30, '다', () => pool[n++ % pool.length], '시작');
+  assert.equal(names.length, 33);
+  assert.equal(names[0], '시작');
+  assert.equal(names[30], '다');
+  for (let i = 1; i < names.length; i++) assert.notEqual(names[i], names[i - 1], `${i}번째가 앞과 같다`);
+  // 멈추기 직전과 직후에는 당첨자 이름이 미리 보이지 않는다
+  assert.ok(!names.slice(25, 30).includes('다') && !names.slice(31).includes('다'));
+  // 고를 이름이 하나뿐이어도 끝난다
+  assert.deepEqual(reelNames(8, '가', () => '가'), new Array(11).fill('가'));
+});
+
+test('릴: 원통 위의 글자', () => {
+  const front = drumPose(0, 1.5, 0.8);
+  assert.deepEqual([Math.abs(front.y), front.sx, front.sy, front.alpha], [0, 1, 1, 1]);
+  // 아직 오지 않은 이름은 위에, 지나간 이름은 아래에 있고 둘 다 눌려 보인다
+  const next = drumPose(1, 1.5, 0.8);
+  const past = drumPose(-1, 1.5, 0.8);
+  assert.ok(next.y < -0.9 && past.y > 0.9);
+  assert.ok(Math.abs(next.y + past.y) < 1e-9);
+  assert.ok(next.sy < 0.75 && next.sx < 1 && next.sx > 0.9);
+  assert.ok(next.alpha > 0.2 && next.alpha < 0.45);
+  // 원통 뒤로 넘어가면 보이지 않는다
+  assert.equal(drumPose(2, 1.5, 0.8).alpha, 0);
 });

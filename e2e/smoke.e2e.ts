@@ -104,10 +104,15 @@ test('추첨기', async () => {
   await page.screenshot({ path: `${SHOTS}/raffle-setup.png` });
 
   await page.locator('button.open').click();
+  // 막이 걷히고 글자가 다 나온 뒤에 찍는다
+  await page.locator('.stage .curtain').first().waitFor({ state: 'detached' });
+  await page.waitForTimeout(900);
   await page.screenshot({ path: `${SHOTS}/raffle-stage-intro.png` });
   // 한 명씩 세 번
   for (let i = 0; i < 3; i++) {
     await page.keyboard.press('Space');
+    // 추첨하는 동안에는 이름이 원통처럼 돌아간다
+    if (i === 0) assert.equal(await page.locator('.stage .drum .line').count(), 5);
     await page.waitForFunction((n) => document.querySelectorAll('.stage .chip').length === n, i + 1, { timeout: 8000 });
     if (i === 0) {
       await page.waitForTimeout(400);
@@ -125,6 +130,7 @@ test('추첨기', async () => {
   await page.keyboard.press('ArrowRight');
   await page.keyboard.press('a');
   await page.keyboard.press('Space');
+  assert.equal(await page.locator('.stage .drum').count(), 20);
   await page.waitForFunction(() => document.querySelectorAll('.stage .chip').length === 20, null, { timeout: 15000 });
   await page.waitForTimeout(600);
   await page.screenshot({ path: `${SHOTS}/raffle-stage-batch.png` });
