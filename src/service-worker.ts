@@ -5,7 +5,8 @@ import { build, files, prerendered, version } from '$service-worker';
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
 const CACHE = `tools-${version}`;
-const ASSETS = [...build, ...files, ...prerendered];
+// _headers · _redirects 는 Cloudflare Pages 설정 파일이라 배포본에서는 내려받을 수 없다 (404). 캐시 목록에서 뺀다.
+const ASSETS = [...build, ...files.filter((f) => !/^\/_(headers|redirects)$/.test(f)), ...prerendered];
 
 sw.addEventListener('install', (event) => {
   event.waitUntil(
