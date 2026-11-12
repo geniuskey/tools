@@ -231,41 +231,64 @@ test('이미지 편집기', async () => {
 
 test('비교', async () => {
   const { browser, page, errors } = await open('/diff');
-  // 텍스트: 예시를 불러와 차이를 센다
+  // 처음에는 양쪽 창이 입력 칸
+  assert.equal(await page.locator('.ovl textarea').count(), 2);
+  // 텍스트: 예시를 불러와 좌우로 맞춰 본다
   await page.getByRole('button', { name: '예시로 보기' }).click();
   await page.locator('.result .r').first().waitFor();
+  assert.equal(await page.locator('.ovl textarea').count(), 0);
   assert.match(await page.locator('.stats').innerText(), /추가 4\s*삭제 0\s*수정 7/);
   assert.ok((await page.locator('.result mark').count()) > 8);
   assert.ok((await page.locator('.fold').count()) >= 1);
+  assert.ok((await page.locator('.tx.void').count()) > 0);
   await page.screenshot({ path: `${SHOTS}/diff-text.png` });
   // 다음 차이로 이동
   await page.keyboard.press('F7');
   assert.match(await page.locator('.pos').innerText(), /^1 \//);
   assert.ok((await page.locator('.r.cur').count()) > 0);
-  // 직접 입력: 같은 내용이면 같다고 알려 준다
+  // 가운데 화살표: 첫 차이를 오른쪽으로 덮어쓰면 차이가 하나 줄고, 되돌리면 돌아온다
+  const blocks = Number((await page.locator('.pos').innerText()).split('/')[1].trim());
+  await page.locator('.cp[aria-label="오른쪽으로 복사"]').first().click();
+  await page.waitForFunction((n) => document.querySelector('.pos')?.textContent?.trim().endsWith(`/ ${n - 1}`), blocks);
+  await page.locator('.result').click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('ControlOrMeta+z');
+  await page.waitForFunction((n) => document.querySelector('.pos')?.textContent?.trim().endsWith(`/ ${n}`), blocks);
+
+  // 전체 편집: 같은 내용이면 같다고 알려 준다
+  await page.getByRole('button', { name: '편집' }).first().click();
   await page.getByLabel('원본', { exact: true }).fill('hello\nworld\n');
+  await page.getByRole('button', { name: '편집' }).click();
   await page.getByLabel('바뀐 내용', { exact: true }).fill('hello\nworld\n');
+  await page.getByLabel('바뀐 내용', { exact: true }).blur();
   await page.getByText('두 내용이 같습니다').waitFor();
-  await page.getByLabel('바뀐 내용', { exact: true }).fill('hello\nWorld!\nnew\n');
-  await page.locator('.result .r').first().waitFor();
+  assert.equal(await page.locator('.ovl textarea').count(), 0);
+  // 줄을 두 번 눌러 바로 고친다: Enter 로 줄을 나눈다
+  await page.locator('.tx.sb', { hasText: 'world' }).dblclick();
+  const line = page.locator('.line-in');
+  await line.fill('World!');
+  await line.press('End');
+  await line.press('Enter');
+  await page.locator('.line-in').fill('new');
+  await page.locator('.line-in').blur();
+  await page.locator('.stats').waitFor();
   assert.match(await page.locator('.stats').innerText(), /추가 1\s*삭제 0\s*수정 1/);
   // 패치 복사
   await page.getByRole('button', { name: '패치 복사' }).click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '--- a\n+++ b\n@@ -1,2 +1,3 @@\n hello\n-world\n+World!\n+new\n');
-  // 한 줄로 보기
-  await page.getByRole('button', { name: '한 줄로' }).click();
-  assert.equal(await page.locator('.result.unified .tx.ins').count(), 2);
-  await page.getByRole('button', { name: '나란히' }).click();
 
   // JSON: 키 순서와 들여쓰기는 무시
   await page.getByRole('button', { name: 'JSON', exact: true }).click();
+  await page.getByRole('button', { name: '지우기' }).first().click();
+  await page.getByRole('button', { name: '지우기' }).last().click();
   await page.getByLabel('원본', { exact: true }).fill('{"b":1,"a":[1,2]}');
   await page.getByLabel('바뀐 내용', { exact: true }).fill('{\n  "a": [1, 2],\n  "b": 1\n}');
+  await page.getByLabel('바뀐 내용', { exact: true }).blur();
   await page.getByText('두 내용이 같습니다').waitFor();
+  await page.getByRole('button', { name: '편집' }).last().click();
   await page.getByLabel('바뀐 내용', { exact: true }).fill('{"a":[1,2],"b":');
   await page.getByText('JSON 형식이 올바르지 않습니다').waitFor();
-  await page.getByLabel('원본', { exact: true }).fill('');
-  await page.getByLabel('바뀐 내용', { exact: true }).fill('');
+  await page.getByRole('button', { name: '지우기' }).first().click();
+  await page.getByRole('button', { name: '지우기' }).last().click();
   await page.getByRole('button', { name: '예시로 보기' }).click();
   await page.locator('.result .r').first().waitFor();
   await page.emulateMedia({ colorScheme: 'dark' });
