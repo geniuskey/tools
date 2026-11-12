@@ -26,3 +26,71 @@ export function sampleCsv(): string {
   }
   return lines.join('\n') + '\n';
 }
+
+export function sampleYaml(): string {
+  return `# 배포 설정
+service: tools
+image: registry.example.com/tools:1.4.2
+replicas: 3
+env: &env
+  TZ: Asia/Seoul
+  LOG_LEVEL: info
+ports:
+  - name: http
+    port: 80
+    target: 8080
+  - name: metrics
+    port: 9100
+    target: 9100
+jobs:
+  - name: 야간 백업
+    schedule: "0 3 * * *"
+    command: [backup, --all, --keep=7]
+    env:
+      <<: *env
+      LOG_LEVEL: debug
+  - name: 주간 보고
+    schedule: "0 9 * * 1"
+    command: [report, --to, team@example.com]
+    env: *env
+notes: |
+  배포 전에 점검표를 확인하세요.
+  문의: 운영팀
+`;
+}
+
+export function sampleToml(): string {
+  return `# 앱 설정
+title = "tools"
+debug = false
+released = 2026-11-13
+
+[server]
+host = "0.0.0.0"
+port = 8080
+origins = ["https://tools.example.com", "http://localhost:5173"]
+
+[server.tls]
+enabled = true
+cert = "/etc/ssl/tools.pem"
+
+[cache]
+ttl = 3600
+size_mb = 256.5
+
+[[users]]
+name = "김하늘"
+role = "admin"
+teams = ["개발팀", "운영팀"]
+
+[[users]]
+name = "이서연"
+role = "editor"
+teams = ["디자인팀"]
+
+[[users]]
+name = "박민준"
+role = "viewer"
+teams = []
+`;
+}

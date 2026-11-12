@@ -1,13 +1,18 @@
-// 데이터 뷰어의 계산 부분: JSON 트리 펼치기 · 검색 · 경로, CSV 읽기/쓰기, 표 변환 · 정렬.
+// 데이터 뷰어의 계산 부분: 형식 판단과 읽기(JSON · YAML · TOML · CSV), 다른 형식으로 쓰기, 트리 펼치기 · 검색 · 경로, 표 변환 · 정렬.
+import { parse as parseToml, stringify as stringifyToml, TomlError } from 'smol-toml';
+import { parseAllDocuments, stringify as stringifyYaml } from 'yaml';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 
 // ── 읽기 ────────────────────────────────────────────────────
 
 export type Parsed =
-  | { kind: 'json'; value: Json; lines: boolean }
+  | { kind: 'json'; value: Json; format: 'json' | 'jsonl' | 'yaml' | 'toml' }
   | { kind: 'csv'; rows: string[][]; delimiter: string }
   | { kind: 'error'; message: string; line?: number; column?: number };
+
+export type Hint = 'json' | 'csv' | 'yaml' | 'toml';
+type Failed = Extract<Parsed, { kind: 'error' }>;
 
 /** 문법에 어긋나는 첫 위치를 찾는다 (엔진마다 오류 메시지에 위치가 없을 수 있어서 직접 훑는다). 문제없으면 -1. */
 export function jsonErrorOffset(text: string): number {
@@ -72,7 +77,7 @@ export function jsonErrorOffset(text: string): number {
   }
 }
 
-function jsonError(text: string, e: unknown): Parsed {
+function jsonError(text: string, e: unknown): Failed {
   const raw = e instanceof Error ? e.message : String(e);
   const message = raw.replace(/ in JSON at position \d+.*$| at position \d+.*$|, \.\.\."[\s\S]*$/, '');
   const at = jsonErrorOffset(text);
@@ -81,32 +86,176 @@ function jsonError(text: string, e: unknown): Parsed {
   return { kind: 'error', message, line: before.split('\n').length, column: at - before.lastIndexOf('\n') };
 }
 
-/** 내용을 보고 JSON · JSON Lines · CSV 가운데 무엇인지 판단해 읽는다. */
-export function parseAny(input: string, hint?: 'json' | 'csv'): Parsed {
-  const text = input.replace(/^﻿/, '');
-  const head = text.trimStart()[0];
-  const looksJson = hint === 'json' || (hint !== 'csv' && (head === '{' || head === '['));
-  if (looksJson) {
-    try {
-      return { kind: 'json', value: JSON.parse(text), lines: false };
-    } catch (e) {
-      // 한 줄에 값 하나씩 (JSON Lines)
-      const lines = text.split('\n').filter((l) => l.trim());
-      if (lines.length > 1) {
-        try {
-          return { kind: 'json', value: lines.map((l) => JSON.parse(l)), lines: true };
-        } catch {}
-      }
-      return jsonError(text, e);
+// 주석(// 와 /* */)과 끝에 남은 쉼표를 지운다 (설정 파일에 흔한 JSON). 글자 수와 줄은 그대로 둔다.
+export function relaxJson(text: string): string {
+  let out = '';
+  let i = 0;
+  const n = text.length;
+  const blank = (s: string) => s.replace(/[^\n]/g, ' ');
+  while (i < n) {
+    const ch = text[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < n && text[j] !== '"' && text[j] !== '\n') j += text[j] === '\\' ? 2 : 1;
+      out += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (ch === '/' && text[i + 1] === '/') {
+      let j = text.indexOf('\n', i);
+      if (j < 0) j = n;
+      out += blank(text.slice(i, j));
+      i = j;
+    } else if (ch === '/' && text[i + 1] === '*') {
+      let j = text.indexOf('*/', i + 2);
+      j = j < 0 ? n : j + 2;
+      out += blank(text.slice(i, j));
+      i = j;
+    } else {
+      out += ch;
+      i++;
     }
   }
+  // 닫는 괄호 바로 앞의 쉼표. 글자 안의 것은 건드리지 않게 글자는 통째로 건너뛴다
+  return out.replace(/"(?:[^"\\\n]|\\.)*"|,(\s*[}\]])/g, (m, tail) => (tail === undefined ? m : ' ' + tail));
+}
+
+/** 라이브러리가 준 값을 JSON 에 있는 형으로만 다시 만든다 (날짜 → 글자, 큰 정수 → 숫자). */
+function plain(v: unknown): Json {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'bigint') return Number(v);
+  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
+  if (Array.isArray(v)) return v.map(plain);
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? String(v) : v.toISOString();
+  if (typeof v === 'object') {
+    const o: { [k: string]: Json } = {};
+    const src = v instanceof Map ? v.entries() : Object.entries(v);
+    for (const [k, x] of src) {
+      const key = typeof k === 'string' ? k : JSON.stringify(k);
+      // __proto__ 라는 키도 보통 키로 넣는다
+      if (key === '__proto__') Object.defineProperty(o, key, { value: plain(x), enumerable: true, writable: true, configurable: true });
+      else o[key] = plain(x);
+    }
+    return o;
+  }
+  return String(v);
+}
+
+function readToml(text: string): Parsed {
+  try {
+    return { kind: 'json', value: plain(parseToml(text, { integersAsBigInt: 'asNeeded' })), format: 'toml' };
+  } catch (e) {
+    const message = (e instanceof Error ? e.message : String(e)).split('\n')[0].replace(/^Invalid TOML document: /, '');
+    const at = e instanceof TomlError ? { line: e.line, column: e.column } : {};
+    return { kind: 'error', message, ...at };
+  }
+}
+
+function readYaml(text: string): Parsed {
+  try {
+    const docs = parseAllDocuments(text, { merge: true, logLevel: 'silent' });
+    for (const d of docs) {
+      const e = d.errors[0];
+      if (e) return { kind: 'error', message: e.message.replace(/ at line \d+, column \d+:[\s\S]*$/, ''), line: e.linePos?.[0].line, column: e.linePos?.[0].col };
+    }
+    if (!docs.length) return { kind: 'error', message: '내용이 비어 있습니다' };
+    const values = docs.map((d) => plain(d.toJS()));
+    // 문서가 여럿(---)이면 배열로 묶는다
+    return { kind: 'json', value: values.length === 1 ? values[0] : values, format: 'yaml' };
+  } catch (e) {
+    return { kind: 'error', message: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function readJson(text: string): Parsed {
+  try {
+    return { kind: 'json', value: JSON.parse(text), format: 'json' };
+  } catch (e) {
+    // 한 줄에 값 하나씩 (JSON Lines)
+    const lines = text.split('\n').filter((l) => l.trim());
+    if (lines.length > 1) {
+      try {
+        return { kind: 'json', value: lines.map((l) => JSON.parse(l)), format: 'jsonl' };
+      } catch {}
+    }
+    // 주석이나 끝 쉼표가 있는 JSON
+    try {
+      const relaxed = relaxJson(text);
+      if (relaxed !== text) return { kind: 'json', value: JSON.parse(relaxed), format: 'json' };
+    } catch {}
+    return jsonError(text, e);
+  }
+}
+
+const TOML_HEADER = /^\[\[?\s*[\w."'-][^\[\]{},]*\]\]?\s*(#.*)?$/;
+const TOML_LINE = /^(?:[A-Za-z0-9_-]+|"[^"]*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"[^"]*"|'[^']*'))*\s*=/;
+const YAML_LINE = /^(?:---(?:\s|$)|%YAML|- |-$|(?:"[^"]*"|'[^']*'|[^\s,;|"'#][^,;|\t]*?):(?:\s|$))/;
+
+/** 주석과 빈 줄을 건너뛴 첫 줄. */
+function firstLine(text: string): string {
+  let i = 0;
+  while (i < text.length) {
+    let j = text.indexOf('\n', i);
+    if (j < 0) j = text.length;
+    const line = text.slice(i, j).trim();
+    if (line && line[0] !== '#') return line;
+    i = j + 1;
+  }
+  return '';
+}
+
+/** 형식을 모를 때: 내용을 보고 차례로 읽어 본다. */
+function readGuess(text: string): Parsed {
   if (!text.trim()) return { kind: 'error', message: '내용이 비어 있습니다' };
-  const delimiter = detectDelimiter(text);
+  const first = firstLine(text);
+  if (first[0] === '{' || first[0] === '[') {
+    const json = readJson(text);
+    if (json.kind !== 'error') return json;
+    // [server] 로 시작하는 TOML
+    if (first[0] === '[' && TOML_HEADER.test(first)) return readToml(text);
+    return json;
+  }
+  let failed: Failed | null = null;
+  if (TOML_LINE.test(first)) {
+    const toml = readToml(text);
+    if (toml.kind !== 'error') return toml;
+    failed = toml;
+  }
+  if (YAML_LINE.test(first)) {
+    const yaml = readYaml(text);
+    if (yaml.kind === 'json' && yaml.value !== null && typeof yaml.value === 'object') return yaml;
+    if (yaml.kind === 'error') failed ??= yaml;
+  }
+  const { delimiter, score } = scoreDelimiter(text);
+  // TOML · YAML 처럼 생겼는데 못 읽었고 표도 아니면, 한 칸짜리 표로 보여 주는 것보다 오류를 알려 준다
+  if (failed && !score) return failed;
   return { kind: 'csv', rows: parseCsv(text, delimiter), delimiter };
+}
+
+/**
+ * 내용을 보고 JSON · JSON Lines · YAML · TOML · CSV 가운데 무엇인지 판단해 읽는다.
+ * hint(확장자)가 있으면 그것부터 해 보고, 안 되면 내용으로 다시 판단한다.
+ */
+export function parseAny(input: string, hint?: Hint): Parsed {
+  const text = input.replace(/^﻿/, '');
+  if (!text.trim()) return { kind: 'error', message: '내용이 비어 있습니다' };
+  if (!hint) return readGuess(text);
+  if (hint === 'csv') {
+    const delimiter = detectDelimiter(text);
+    return { kind: 'csv', rows: parseCsv(text, delimiter), delimiter };
+  }
+  const first = hint === 'json' ? readJson(text) : hint === 'yaml' ? readYaml(text) : readToml(text);
+  if (first.kind !== 'error') return first;
+  // 확장자와 내용이 다를 수 있다. 다만 표로 읽히는 것은 아무 글이나 다 되므로 받아들이지 않는다
+  const guess = readGuess(text);
+  return guess.kind === 'json' ? guess : first;
 }
 
 /** 앞쪽 몇 줄에서 가장 고르게 나오는 구분자를 고른다. */
 export function detectDelimiter(text: string): string {
+  return scoreDelimiter(text).delimiter;
+}
+
+/** score 가 0 이면 모든 줄에 나오는 구분자가 없다 (표가 아닐 수 있다). */
+function scoreDelimiter(text: string): { delimiter: string; score: number } {
   const sample = text.slice(0, 20000).split('\n').slice(0, 12);
   if (sample.length > 1 && text.length > 20000) sample.pop();
   let best = ',';
@@ -129,7 +278,7 @@ export function detectDelimiter(text: string): string {
       best = d;
     }
   }
-  return best;
+  return { delimiter: best, score: bestScore };
 }
 
 /** RFC 4180 방식. 따옴표 안의 구분자 · 줄바꿈 · "" 를 처리한다. */
@@ -184,6 +333,52 @@ export function parseCsv(input: string, delimiter = ','): string[][] {
   if (row.length) rows.push(row);
   // 빈 줄은 뺀다
   return rows.filter((r) => r.length > 1 || r[0] !== '');
+}
+
+// ── 쓰기 ────────────────────────────────────────────────────
+
+export function toJson(value: Json, pretty = true): string {
+  return JSON.stringify(value, null, pretty ? 2 : 0) + '\n';
+}
+
+export function toYaml(value: Json): string {
+  // 긴 글도 줄을 접지 않고, 같은 값이 여러 번 나와도 별칭(&a · *a) 없이 그대로 쓴다
+  return stringifyYaml(value, { lineWidth: 0, aliasDuplicateObjects: false });
+}
+
+export interface TomlText {
+  text: string;
+  /** 맨 위가 객체가 아니어서 이 키 아래에 넣었다 */
+  wrapped: string | null;
+  /** TOML 에 없어서 뺀 null 의 수 */
+  dropped: number;
+}
+
+/** TOML 은 맨 위가 표(객체)여야 하고 null 이 없다. 맞지 않는 곳은 고쳐 쓰고 무엇을 고쳤는지 알려 준다. */
+export function toToml(value: Json): TomlText {
+  let dropped = 0;
+  const clean = (v: Json): Json => {
+    if (Array.isArray(v)) {
+      const out: Json[] = [];
+      for (const x of v) {
+        if (x === null) dropped++;
+        else out.push(clean(x));
+      }
+      return out;
+    }
+    if (isBox(v)) {
+      const o: { [k: string]: Json } = {};
+      for (const k of Object.keys(v)) {
+        if (v[k] === null) dropped++;
+        else o[k] = clean(v[k]);
+      }
+      return o;
+    }
+    return v;
+  };
+  const wrapped = Array.isArray(value) ? 'items' : isBox(value) ? null : 'value';
+  const body = clean(wrapped ? { [wrapped]: value } : value);
+  return { text: stringifyToml(body).replace(/\n*$/, '\n'), wrapped, dropped };
 }
 
 // ── 표 ──────────────────────────────────────────────────────

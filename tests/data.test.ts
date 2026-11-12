@@ -15,6 +15,10 @@ import {
   numericColumns,
   parseAny,
   parseCsv,
+  relaxJson,
+  toJson,
+  toToml,
+  toYaml,
   pathText,
   preview,
   search,
@@ -42,8 +46,8 @@ test('구분자 찾기', () => {
 });
 
 test('형식 판단: JSON · JSON Lines · CSV · 오류 위치', () => {
-  assert.deepEqual(parseAny(' {"a":1}'), { kind: 'json', value: { a: 1 }, lines: false });
-  assert.deepEqual(parseAny('{"a":1}\n{"a":2}\n'), { kind: 'json', value: [{ a: 1 }, { a: 2 }], lines: true });
+  assert.deepEqual(parseAny(' {"a":1}'), { kind: 'json', value: { a: 1 }, format: 'json' });
+  assert.deepEqual(parseAny('{"a":1}\n{"a":2}\n'), { kind: 'json', value: [{ a: 1 }, { a: 2 }], format: 'jsonl' });
   const csv = parseAny('x,y\n1,2');
   assert.ok(csv.kind === 'csv' && csv.rows.length === 2);
   const err = parseAny('{\n  "a": 1,\n  "b": oops\n}');
@@ -186,4 +190,78 @@ test('문서 안의 표 찾기 · 영역별 표', () => {
   // 키에 든 * 는 모든 항목 자리와 섞이지 않는다
   assert.equal(childId('', '*'), '/~2');
   assert.deepEqual(tableAt({ '*': [{ a: 1 }] }, '/~2')!.rows, [['1']]);
+});
+
+const read = (text: string, hint?: 'json' | 'csv' | 'yaml' | 'toml') => {
+  const p = parseAny(text, hint);
+  return p.kind === 'json' ? [p.format, p.value] : p.kind === 'csv' ? ['csv', p.rows] : ['error', p.line, p.column];
+};
+
+test('형식 판단: YAML · TOML · 주석 있는 JSON', () => {
+  // YAML
+  assert.deepEqual(read('name: 도구\ntags:\n  - a\n  - b\nnested:\n  on: yes\n  n: 3\n'), ['yaml', { name: '도구', tags: ['a', 'b'], nested: { on: 'yes', n: 3 } }]);
+  assert.deepEqual(read('# 설명\n---\n- id: 1\n  when: 2026-11-13\n- id: 2\n'), ['yaml', [{ id: 1, when: '2026-11-13' }, { id: 2 }]]);
+  assert.deepEqual(read('a: 1\n---\na: 2\n'), ['yaml', [{ a: 1 }, { a: 2 }]]);
+  assert.deepEqual(read('base: &b {x: 1}\nuse:\n  <<: *b\n  y: 2\n'), ['yaml', { base: { x: 1 }, use: { x: 1, y: 2 } }]);
+  assert.deepEqual(read('"quoted key": [1, 2]\n'), ['yaml', { 'quoted key': [1, 2] }]);
+  // TOML
+  assert.deepEqual(read('title = "도구"\nport = 8080\n\n[owner]\nname = "김"\nsince = 2026-11-13\n\n[[servers]]\nip = "10.0.0.1"\n\n[[servers]]\nip = "10.0.0.2"\n'), [
+    'toml',
+    { title: '도구', port: 8080, owner: { name: '김', since: '2026-11-13' }, servers: [{ ip: '10.0.0.1' }, { ip: '10.0.0.2' }] },
+  ]);
+  assert.deepEqual(read('# 설정\n[server]\nhost = "a"\n'), ['toml', { server: { host: 'a' } }]);
+  assert.deepEqual(read('[[rows]]\na = 1\n'), ['toml', { rows: [{ a: 1 }] }]);
+  assert.deepEqual(read('a.b = 1\nbig = 9007199254740993\n'), ['toml', { a: { b: 1 }, big: 9007199254740992 }]);
+  // 주석 · 끝 쉼표가 있는 JSON
+  assert.deepEqual(read('{\n  // 주석\n  "a": "x // y", /* 또 */\n  "b": [1, 2,],\n}\n'), ['json', { a: 'x // y', b: [1, 2] }]);
+  assert.equal(relaxJson('{"a": ",}" , }').length, 14);
+  assert.deepEqual(JSON.parse(relaxJson('{"a": ",}" , }')), { a: ',}' });
+  // JSON 은 그대로
+  assert.deepEqual(read('[1, 2]'), ['json', [1, 2]]);
+  assert.deepEqual(read('["a"]\n["b"]'), ['jsonl', [['a'], ['b']]]);
+  // CSV 는 여전히 CSV
+  assert.equal(read('이름,부서\n김하늘,개발팀\n')[0], 'csv');
+  assert.equal(read('time: start,end\n1,2\n')[0], 'csv');
+  assert.equal(read('k=v,x\n1,2\n')[0], 'csv');
+  assert.equal(read('그냥 글\n두 줄\n')[0], 'csv');
+  assert.equal(read('a\tb\n1\t2\n')[0], 'csv');
+  // 못 읽으면 어디가 틀렸는지
+  assert.deepEqual(read('a = 1\nb = oops\n'), ['error', 2, 5]);
+  assert.deepEqual(read('a: 1\nb: [1, 2\n'), ['error', 3, 1]);
+  assert.deepEqual(read('[server]\nhost = \n'), ['error', 2, 8]);
+  // 확장자가 먼저, 안 되면 내용으로
+  assert.deepEqual(read('{a: 1, b: [x, y]}', 'yaml'), ['yaml', { a: 1, b: ['x', 'y'] }]);
+  assert.deepEqual(read('a = 1\n', 'yaml'), ['yaml', 'a = 1']);
+  assert.deepEqual(read('a: 1\n', 'json'), ['yaml', { a: 1 }]);
+  assert.deepEqual(read('{"a": 1}', 'toml'), ['json', { a: 1 }]);
+  assert.equal(read('x,y\n1,2\n', 'json')[0], 'error');
+  assert.equal(read('a: 1\n', 'csv')[0], 'csv');
+});
+
+test('다른 형식으로 쓰기와 왕복', () => {
+  const doc: Json = { name: '도구', on: true, n: 1.5, text: '여러\n줄', empty: null, list: [1, 'a', null], rows: [{ id: 1, tag: 'no' }, { id: 2, tag: '2026-11-13' }], deep: { a: { b: [] } } };
+  assert.deepEqual(JSON.parse(toJson(doc)), doc);
+  assert.equal(toJson([1, { a: 2 }], false), '[1,{"a":2}]\n');
+  // YAML: 그대로 돌아온다
+  assert.deepEqual(read(toYaml(doc), 'yaml'), ['yaml', doc]);
+  assert.deepEqual(read(toYaml(doc)), ['yaml', doc]);
+  const shared = { k: 1 };
+  assert.ok(!toYaml({ a: shared, b: shared }).includes('*'));
+  assert.equal(toYaml({ a: 'x '.repeat(80) }).trim().split('\n').length, 1);
+  // TOML: null 은 빠지고 나머지는 돌아온다
+  const t = toToml(doc);
+  assert.deepEqual([t.wrapped, t.dropped], [null, 2]);
+  assert.deepEqual(read(t.text), ['toml', { name: '도구', on: true, n: 1.5, text: '여러\n줄', list: [1, 'a'], rows: [{ id: 1, tag: 'no' }, { id: 2, tag: '2026-11-13' }], deep: { a: { b: [] } } }]);
+  assert.match(t.text, /\[\[rows\]\]/);
+  // 맨 위가 배열이나 값이면 감싼다
+  const arr = toToml([{ a: 1 }, { a: 2 }]);
+  assert.equal(arr.wrapped, 'items');
+  assert.deepEqual(read(arr.text), ['toml', { items: [{ a: 1 }, { a: 2 }] }]);
+  assert.deepEqual(toToml(3), { text: 'value = 3\n', wrapped: 'value', dropped: 0 });
+  // CSV → 객체 → YAML · TOML
+  const p = parseAny('id,name\n1,김\n2,\n');
+  assert.ok(p.kind === 'csv');
+  const rows = tableToJson(csvToTable(p.rows, true));
+  assert.equal(toYaml(rows), '- id: 1\n  name: 김\n- id: 2\n  name: null\n');
+  assert.equal(toToml(rows).text, '[[items]]\nid = 1\nname = "김"\n\n[[items]]\nid = 2\n');
 });

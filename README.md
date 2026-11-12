@@ -10,7 +10,7 @@
 | 추첨기 | `/raffle` | 엑셀 붙여넣기, 경품별 인원, 암호학적 난수, 전체 화면 무대, 결과 내보내기 |
 | 비교 | `/diff` | 직접 만든 diff 엔진(Myers + patience), 줄 · 단어 단위 강조, 패치 내보내기, JSON 정규화, 이미지 슬라이더 · 픽셀 차이 |
 | 화면 녹화 | `/recorder` | 화면 · 창 · 탭 녹화, 구간 · 영역 자르기, 직접 만든 GIF 인코더(공용 팔레트 + 바뀐 영역만 기록), 영상 → GIF |
-| 데이터 뷰어 | `/data` | JSON 트리 · CSV 표(보이는 줄만 그려 100만 행도 바로), 검색 · 경로 복사, 정렬 · 거르기, JSON ↔ CSV |
+| 데이터 뷰어 | `/data` | JSON 트리 · CSV 표(보이는 줄만 그려 100만 행도 바로), 검색 · 경로 복사, 정렬 · 거르기, JSON · YAML · TOML · CSV 를 알아서 읽고 서로 변환 |
 | QR 코드 | `/qr` | 직접 만든 QR 인코더(버전 1~40), Wi-Fi · 연락처 양식, 모양 · 색 · 로고, 브라우저 인식기로 읽기 확인 |
 | 행사 타이머 | `/timer` | 순서표, 발표자 화면을 다른 창으로(BroadcastChannel 동기화), 화면 메시지, 경고 색 · 소리 |
 
@@ -40,7 +40,7 @@ npm run deploy     # Cloudflare Pages (프로젝트 이름: tools)
 - `src/lib/image/` — 도형 모델(`shapes.ts`), 픽셀 처리(`raster.ts`), 편집기 상태(`editor.svelte.ts`).
 - `src/lib/diff/` — 비교 엔진(`core.ts`), 픽셀 비교(`image.ts`), 화면(`TextDiff.svelte`, `ImageDiff.svelte`).
 - `src/lib/recorder/gif.ts` — GIF 인코더 (팔레트 양자화, LZW, 프레임 차분).
-- `src/lib/data/core.ts` — CSV 파서, JSON 트리 펼치기 · 검색, 표 변환 · 정렬.
+- `src/lib/data/core.ts` — 형식 판단(JSON · YAML · TOML · CSV)과 변환, CSV 파서, JSON 트리 펼치기 · 검색, 표 변환 · 정렬. YAML · TOML 읽기/쓰기는 `yaml` · `smol-toml`.
 - `src/lib/qr/` — QR 인코더(`core.ts`), 내용 양식(`payload.ts`), SVG 그리기(`render.ts`).
 - `src/lib/timer/` — 타이머 계산(`core.ts`), 창 사이 동기화(`store.svelte.ts`), 무대(`Stage.svelte`).
 

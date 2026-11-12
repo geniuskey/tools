@@ -467,6 +467,64 @@ test('데이터 뷰어', async () => {
   await page.locator('.tr').first().locator('.td').nth(6).dblclick();
   await page.waitForFunction(() => /^1행 · 3열$/.test(document.querySelector('.bar .count')?.textContent ?? ''));
 
+  // 변환: JSON → YAML · TOML · CSV
+  await page.getByRole('button', { name: '변환', exact: true }).click();
+  const outText = page.getByLabel('바꾼 결과');
+  await page.waitForFunction(() => (document.querySelector('.outtext') as HTMLTextAreaElement | null)?.value.startsWith('shop: tools.euiyun.com\n'));
+  assert.match(await outText.inputValue(), /\norders:\n  - id: 1001\n    customer:\n      name: 김하늘\n/);
+  await page.screenshot({ path: `${SHOTS}/data-convert.png` });
+  await page.getByRole('group', { name: '바꿀 형식' }).getByRole('button', { name: 'TOML' }).click();
+  await page.waitForFunction(() => (document.querySelector('.outtext') as HTMLTextAreaElement | null)?.value.includes('[[orders]]'));
+  assert.match(await page.locator('.status').innerText(), /JSON → TOML · TOML 에 없는 null 221개는 뺐습니다/);
+  await page.getByRole('group', { name: '바꿀 형식' }).getByRole('button', { name: 'CSV' }).click();
+  // 표로 보던 곳이 그대로 CSV 가 된다. 다른 배열로 바꿀 수 있다
+  await page.waitForFunction(() => (document.querySelector('.outtext') as HTMLTextAreaElement | null)?.value.startsWith('name,qty,price\n'));
+  await page.getByLabel('표로 볼 곳').selectOption('/orders');
+  await page.waitForFunction(() => (document.querySelector('.outtext') as HTMLTextAreaElement | null)?.value.startsWith('id,customer.name,'));
+  assert.match(await page.locator('.bar .count').innerText(), /^241줄/);
+  await page.getByLabel('표로 볼 곳').selectOption('/orders/*/items');
+  await page.waitForFunction(() => (document.querySelector('.outtext') as HTMLTextAreaElement | null)?.value.startsWith('orders[*],name,qty,price\n'));
+  await page.getByRole('button', { name: '복사', exact: true }).click();
+  assert.equal((await page.evaluate(() => navigator.clipboard.readText())).split('\n').length, 482);
+  // 저장: 고른 형식의 파일로
+  const [saved] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '저장', exact: true }).click()]);
+  assert.equal(saved.suggestedFilename(), 'orders.csv');
+  await page.getByRole('button', { name: '트리', exact: true }).click();
+  await page.getByRole('button', { name: '저장 ▾' }).click();
+  assert.deepEqual(await page.getByRole('menuitem').allInnerTexts(), ['JSON 파일로 저장', 'YAML 파일로 저장', 'TOML 파일로 저장', 'CSV 파일로 저장']);
+  const [yamlFile] = await Promise.all([page.waitForEvent('download'), page.getByRole('menuitem', { name: 'YAML 파일로 저장' }).click()]);
+  assert.equal(yamlFile.suggestedFilename(), 'orders.yaml');
+
+  // YAML · TOML 도 읽는다
+  await page.getByRole('button', { name: '다른 데이터' }).click();
+  await page.getByRole('button', { name: 'YAML 예시' }).click();
+  await page.locator('.trow').first().waitFor();
+  assert.match(await page.locator('.chip').innerText(), /^YAML · /);
+  await page.getByRole('button', { name: '변환', exact: true }).click();
+  await page.waitForFunction(() => (document.querySelector('.outtext') as HTMLTextAreaElement | null)?.value.startsWith('{\n  "service": "tools",'));
+  assert.equal(JSON.parse(await outText.inputValue()).jobs[0].env.LOG_LEVEL, 'debug');
+  await page.getByLabel('한 줄로').check();
+  await page.waitForFunction(() => (document.querySelector('.outtext') as HTMLTextAreaElement | null)?.value.startsWith('{"service":"tools",'));
+  await page.getByRole('button', { name: '다른 데이터' }).click();
+  await page.getByRole('button', { name: 'TOML 예시' }).click();
+  await page.locator('.trow').first().waitFor();
+  assert.match(await page.locator('.chip').innerText(), /^TOML · /);
+  await page.getByRole('button', { name: '표', exact: true }).click();
+  assert.match(await page.locator('.bar .count').innerText(), /^3행 · 3열$/);
+  // 붙여넣은 글의 형식을 알아서 판단한다
+  await page.getByRole('button', { name: '다른 데이터' }).click();
+  await page.getByLabel('데이터 붙여넣기').fill('name: 도구\ntags:\n  - a\n  - b\n');
+  await page.getByRole('button', { name: '보기', exact: true }).click();
+  await page.getByRole('button', { name: '변환', exact: true }).click();
+  await page.getByRole('group', { name: '바꿀 형식' }).getByRole('button', { name: 'TOML' }).click();
+  assert.equal(await outText.inputValue(), 'name = "도구"\ntags = [ "a", "b" ]\n');
+  await page.getByRole('button', { name: '다른 데이터' }).click();
+  await page.getByLabel('데이터 붙여넣기').fill('[server]\nport = 80\nhost = \n');
+  await page.getByRole('button', { name: '보기', exact: true }).click();
+  assert.match(await page.locator('.error').innerText(), /3번째 줄/);
+  await page.getByLabel('데이터 붙여넣기').fill('');
+  await page.getByRole('button', { name: 'JSON 예시' }).click();
+
   // CSV 예시: 표
   await page.getByRole('button', { name: '다른 데이터' }).click();
   await page.getByRole('button', { name: 'CSV 예시' }).click();

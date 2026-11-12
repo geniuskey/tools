@@ -19,17 +19,22 @@
     tableAt,
     tableToJson,
     toCsv,
+    toJson,
+    toToml,
+    toYaml,
     valueAt,
     viewOrder,
+    type Hint,
     type Json,
     type Parsed,
     type Table,
     type TableSpot,
     type TreeRow,
   } from '$lib/data/core';
-  import { sampleCsv, sampleJson } from '$lib/data/samples';
+  import { sampleCsv, sampleJson, sampleToml, sampleYaml } from '$lib/data/samples';
 
   const MAX_FILE = 200 * 1024 * 1024;
+  const EXT_HINT: Record<string, Hint | undefined> = { json: 'json', jsonl: 'json', ndjson: 'json', jsonc: 'json', csv: 'csv', tsv: 'csv', yaml: 'yaml', yml: 'yaml', toml: 'toml' };
   const ROW = 24;
 
   type Loaded = Extract<Parsed, { kind: 'json' | 'csv' }>;
@@ -37,7 +42,7 @@
   let inputEl = $state<HTMLTextAreaElement>();
   let error = $state<Extract<Parsed, { kind: 'error' }> | null>(null);
   let loaded = $state.raw<{ data: Loaded; name: string; bytes: number } | null>(null);
-  let mode = $state<'tree' | 'table'>('tree');
+  let mode = $state<'tree' | 'table' | 'text'>('tree');
   let header = $state(true);
   let dragOver = $state(false);
   let toast = $state('');
@@ -47,7 +52,7 @@
     setTimeout(() => toast === msg && (toast = ''), 2200);
   }
 
-  async function open(text: string, name = '', hint?: 'json' | 'csv') {
+  async function open(text: string, name = '', hint?: Hint) {
     const p = parseAny(text, hint);
     if (p.kind === 'error') {
       error = p;
@@ -75,6 +80,8 @@
     filter = '';
     sort = null;
     cell = null;
+    // 바꿀 형식은 들어온 것과 다른 것으로
+    out = p.kind === 'json' && (p.format === 'json' || p.format === 'jsonl') ? 'yaml' : 'json';
     // 표로 볼 곳: 뿌리가 표면 뿌리, 아니면 문서에서 가장 얕은 곳의 배열
     spots = p.kind === 'json' ? findTables(p.value) : [];
     target = p.kind !== 'json' || tableAt(p.value) ? '' : (spots[0]?.id ?? '');
@@ -101,7 +108,7 @@
     if (!f) return;
     if (f.size > MAX_FILE) return say('파일이 너무 큽니다 (최대 200MB)');
     const ext = f.name.split('.').pop()?.toLowerCase();
-    open(await f.text(), f.name, ext === 'json' || ext === 'jsonl' || ext === 'ndjson' ? 'json' : ext === 'csv' || ext === 'tsv' ? 'csv' : undefined);
+    open(await f.text(), f.name, EXT_HINT[ext ?? '']);
   }
 
   function reset() {
@@ -128,7 +135,7 @@
   const kindLabel = $derived.by(() => {
     const d = loaded?.data;
     if (!d) return '';
-    if (d.kind === 'json') return d.lines ? 'JSON Lines' : 'JSON';
+    if (d.kind === 'json') return { json: 'JSON', jsonl: 'JSON Lines', yaml: 'YAML', toml: 'TOML' }[d.format];
     return { ',': 'CSV', '\t': 'TSV (탭)', ';': 'CSV (세미콜론)', '|': 'CSV (세로줄)' }[d.delimiter] ?? 'CSV';
   });
   const bytes = (b: number) => (b < 1024 ? `${b}B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(1)}KB` : `${(b / 1024 / 1024).toFixed(1)}MB`);
@@ -327,13 +334,71 @@
     if (jtable) return Array.from(order, (i) => valueAt(root, jtable.ids[i]) ?? null);
     return tableToJson({ columns: table.columns, rows: Array.from(order, (i) => table.rows[i]) });
   };
-  function saveJson() {
-    downloadBlob(new Blob([JSON.stringify(viewJson(), null, 2) + '\n'], { type: 'application/json' }), `${base()}.json`);
+
+  // ── 다른 형식으로 ─────────────────────────────────────
+  type Format = 'json' | 'yaml' | 'toml' | 'csv';
+  const FORMATS: { id: Format; label: string; mime: string }[] = [
+    { id: 'json', label: 'JSON', mime: 'application/json' },
+    { id: 'yaml', label: 'YAML', mime: 'application/yaml' },
+    { id: 'toml', label: 'TOML', mime: 'application/toml' },
+    { id: 'csv', label: 'CSV', mime: 'text/csv' },
+  ];
+  const SHOW_MAX = 500_000;
+  let out = $state<Format>('yaml');
+  let oneLine = $state(false);
+
+  /** CSV 로 낼 표. 표로 볼 배열이 없으면 객체 하나를 한 행으로 펼친다. */
+  const csvTable = $derived.by<Table | null>(() => {
+    if (table) return table;
+    return loaded && root !== null && typeof root === 'object' && !Array.isArray(root) ? tableAt([root]) : null;
+  });
+
+  /** whole 이면 문서 전체, 아니면 지금 화면에 보이는 것(표에서는 거르고 정렬한 행). */
+  function render(format: Format, whole: boolean): { text: string; note: string } {
+    if (format === 'csv') {
+      if (!csvTable) throw new Error('표로 펼칠 수 있는 배열이나 객체가 없어 CSV 로 바꿀 수 없습니다');
+      const part = jtable && target ? `${pathText(root, target)} 부분만 표로 바꿨습니다. 안쪽 객체는 a.b 열로 펼칩니다.` : !table ? '객체 하나를 한 행으로 펼쳤습니다.' : '';
+      return { text: toCsv(csvTable, ',', !whole && mode === 'table' ? order : undefined), note: part };
+    }
+    const value = whole ? root : viewJson();
+    if (format === 'json') return { text: toJson(value, !oneLine || !whole), note: '' };
+    if (format === 'yaml') return { text: toYaml(value), note: '' };
+    const t = toToml(value);
+    const notes = [];
+    if (t.wrapped) notes.push(`TOML 은 맨 위가 객체여야 해서 ${t.wrapped} 아래에 넣었습니다.`);
+    if (t.dropped) notes.push(`TOML 에 없는 null ${num(t.dropped)}개는 뺐습니다.`);
+    return { text: t.text, note: notes.join(' ') };
   }
-  function saveCsv() {
-    if (!table) return;
-    // 엑셀이 한글을 알아보도록 BOM 을 붙인다
-    downloadBlob(new Blob(['﻿' + toCsv(table, ',', mode === 'table' ? order : undefined)], { type: 'text/csv' }), `${base()}.csv`);
+
+  const converted = $derived.by(() => {
+    if (mode !== 'text' || !loaded) return { text: '', note: '', error: '' };
+    try {
+      return { ...render(out, true), error: '' };
+    } catch (e) {
+      return { text: '', note: '', error: e instanceof Error ? e.message : String(e) };
+    }
+  });
+  const shownText = $derived(converted.text.length > SHOW_MAX ? converted.text.slice(0, SHOW_MAX) : converted.text);
+  const lineCount = $derived.by(() => {
+    let n = 0;
+    for (let i = converted.text.indexOf('\n'); i >= 0; i = converted.text.indexOf('\n', i + 1)) n++;
+    return n;
+  });
+
+  function save(format: Format) {
+    const f = FORMATS.find((x) => x.id === format)!;
+    try {
+      const { text, note } = mode === 'text' && format === out ? converted : render(format, mode === 'text');
+      // 엑셀이 한글을 알아보도록 CSV 에는 BOM 을 붙인다
+      downloadBlob(new Blob([format === 'csv' ? '﻿' + text : text], { type: f.mime }), `${base()}.${format}`);
+      if (note) say(note);
+    } catch (e) {
+      say(e instanceof Error ? e.message : String(e));
+    }
+  }
+  function saveMenu(e: MouseEvent) {
+    const b = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openMenu(b.left, b.bottom + 4, FORMATS.filter((f) => f.id !== 'csv' || csvTable).map((f) => ({ label: `${f.label} 파일로 저장`, run: () => save(f.id) })));
   }
 
   // ── 오른쪽 버튼 메뉴 ──────────────────────────────────
@@ -439,7 +504,7 @@
   }
 
   function onWindowKey(e: KeyboardEvent) {
-    if (!loaded) return;
+    if (!loaded || mode === 'text') return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
       e.preventDefault();
       searchEl?.focus();
@@ -491,7 +556,7 @@
       }}
     >
       <div class="card">
-        <h2>JSON · CSV 를 펼쳐 봅니다</h2>
+        <h2>JSON · YAML · TOML · CSV 를 펼쳐 보고 서로 바꿉니다</h2>
         <p>붙여넣거나 파일을 끌어다 놓으세요. 형식은 알아서 판단합니다. 수십만 줄도 바로 열리고, 내용은 이 브라우저 밖으로 나가지 않습니다.</p>
         <textarea
           class="field"
@@ -500,7 +565,7 @@
           spellcheck="false"
           autocapitalize="off"
           aria-label="데이터 붙여넣기"
-          placeholder={'{"여기에": "JSON 이나 CSV 를 붙여넣으세요"}'}
+          placeholder={'{"여기에": "JSON, YAML, TOML, CSV 무엇이든 붙여넣으세요"}'}
           onpaste={(e) => {
             const t = e.clipboardData?.getData('text/plain');
             if (!input && t) {
@@ -522,7 +587,7 @@
             파일 열기
             <input
               type="file"
-              accept=".json,.jsonl,.ndjson,.csv,.tsv,.txt,application/json,text/csv,text/plain"
+              accept=".json,.jsonl,.ndjson,.jsonc,.yaml,.yml,.toml,.csv,.tsv,.txt,application/json,application/yaml,application/toml,text/csv,text/plain"
               hidden
               onchange={(e) => {
                 openFile(e.currentTarget.files?.[0]);
@@ -532,6 +597,8 @@
           </label>
           <span class="gap"></span>
           <button class="btn ghost" onclick={() => open(sampleJson(), 'orders.json')}>JSON 예시</button>
+          <button class="btn ghost" onclick={() => open(sampleYaml(), 'deploy.yaml')}>YAML 예시</button>
+          <button class="btn ghost" onclick={() => open(sampleToml(), 'config.toml')}>TOML 예시</button>
           <button class="btn ghost" onclick={() => open(sampleCsv(), 'members.csv')}>CSV 예시</button>
         </div>
       </div>
@@ -542,6 +609,7 @@
         <div class="seg" role="group" aria-label="보기 방식">
           <button aria-pressed={mode === 'tree'} onclick={() => (mode = 'tree')}>트리</button>
           <button aria-pressed={mode === 'table'} disabled={!table} title={table ? '' : '객체의 배열이 있어야 표로 볼 수 있습니다'} onclick={() => (mode = 'table')}>표</button>
+          <button aria-pressed={mode === 'text'} title="다른 형식의 글로 바꿉니다" onclick={() => (mode = 'text')}>변환</button>
         </div>
         {#if mode === 'tree'}
           <div class="find">
@@ -554,7 +622,7 @@
           </div>
           <button class="btn sm" onclick={openAll}>모두 펼치기</button>
           <button class="btn sm" onclick={() => (expanded = new Set(['']))}>모두 접기</button>
-        {:else if table}
+        {:else if mode === 'table' && table}
           {#if places.length > 1 || target}
             <select class="field place" aria-label="표로 볼 곳" title="문서에서 표로 볼 수 있는 곳" value={target} onchange={(e) => showTable(e.currentTarget.value)}>
               {#each places as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
@@ -567,17 +635,37 @@
           {#if loaded.data.kind === 'csv'}
             <label class="opt"><input type="checkbox" bind:checked={header} onchange={() => ((sort = null), (cell = null))} /> 첫 줄은 제목</label>
           {/if}
+        {:else if mode === 'text'}
+          <div class="seg" role="group" aria-label="바꿀 형식">
+            {#each FORMATS as f (f.id)}
+              <button aria-pressed={out === f.id} onclick={() => (out = f.id)}>{f.label}</button>
+            {/each}
+          </div>
+          {#if out === 'json'}
+            <label class="opt"><input type="checkbox" bind:checked={oneLine} /> 한 줄로</label>
+          {:else if out === 'csv' && places.length > 1}
+            <select class="field place" aria-label="표로 볼 곳" title="CSV 로 바꿀 배열" value={target} onchange={(e) => (target = e.currentTarget.value)}>
+              {#each places as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
+            </select>
+          {:else if out === 'csv' && loaded.data.kind === 'csv'}
+            <label class="opt"><input type="checkbox" bind:checked={header} /> 첫 줄은 제목</label>
+          {/if}
+          {#if !converted.error}<span class="count">{num(lineCount)}줄 · {bytes(converted.text.length)}</span>{/if}
         {/if}
         <div class="right">
           {#if toast}<span class="toast" role="status">{toast}</span>{/if}
           {#if mode === 'tree'}
             <button class="btn sm" onclick={() => copy(JSON.stringify(root, null, 2), 'JSON 을')}>JSON 복사</button>
             <button class="btn sm" onclick={() => copy(JSON.stringify(root), '한 줄 JSON 을')} title="공백을 모두 뺀 한 줄">한 줄로 복사</button>
-          {:else if table}
+          {:else if mode === 'table' && table}
             <button class="btn sm" onclick={() => copy(toCsv(table, '\t', order), '표를')} title="엑셀 · 시트에 바로 붙여넣을 수 있습니다">엑셀용 복사</button>
+          {:else if mode === 'text'}
+            <button class="btn sm" disabled={!!converted.error} onclick={() => copy(converted.text, `${FORMATS.find((f) => f.id === out)?.label} 을`)}>복사</button>
+            <button class="btn sm" disabled={!!converted.error} onclick={() => save(out)}>저장</button>
           {/if}
-          <button class="btn sm" onclick={saveJson}>JSON 저장</button>
-          <button class="btn sm" disabled={!table} onclick={saveCsv}>CSV 저장</button>
+          {#if mode !== 'text'}
+            <button class="btn sm" aria-haspopup="menu" onclick={saveMenu} title={mode === 'table' ? '지금 보이는 행을 고른 형식으로 저장합니다' : '고른 형식으로 저장합니다'}>저장 ▾</button>
+          {/if}
         </div>
       </div>
 
@@ -622,6 +710,12 @@
             {/if}
           {/snippet}
           <VirtualList bind:this={treeList} count={rows.length} rowHeight={ROW} row={treeRow} label="JSON 트리" onkeydown={onTreeKey} />
+        {:else if mode === 'text'}
+          {#if converted.error}
+            <p class="none">{converted.error}</p>
+          {:else}
+            <textarea class="outtext" readonly spellcheck="false" aria-label="바꾼 결과" value={shownText}></textarea>
+          {/if}
         {:else if table}
           {#snippet tableHead()}
             <div class="thead">
@@ -662,6 +756,8 @@
           <code class="path">{pathText(root, selected)}</code>
           <button class="btn sm ghost" onclick={() => copy(pathText(root, selected), '경로를')}>경로 복사</button>
           <button class="btn sm ghost" disabled={selValue === undefined} onclick={() => copy(typeof selValue === 'string' ? selValue : JSON.stringify(selValue, null, 2), '값을')}>값 복사</button>
+        {:else if mode === 'text'}
+          <span class="hint">{[`${kindLabel} → ${FORMATS.find((f) => f.id === out)?.label}`, converted.note, converted.text.length > SHOW_MAX ? `앞 ${num(SHOW_MAX)}자만 보여 줍니다. 복사 · 저장에는 전체가 들어갑니다.` : ''].filter(Boolean).join(' · ')}</span>
         {:else if cell && table}
           <b class="where">{table.columns[cell.col]} · {num(order[cell.row] + 1)}행</b>
           <code class="path">{cellValue.length > 600 ? cellValue.slice(0, 600) + '…' : cellValue}</code>
@@ -847,6 +943,21 @@
   }
   .box :global(.vl:focus-visible) {
     box-shadow: inset 0 0 0 2px var(--app-line);
+  }
+
+  .outtext {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 14px;
+    border: 0;
+    outline: none;
+    resize: none;
+    background: none;
+    color: inherit;
+    font: inherit;
+    line-height: 1.6;
+    white-space: pre;
+    tab-size: 2;
   }
 
   /* 트리 */
