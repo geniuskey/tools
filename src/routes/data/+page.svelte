@@ -6,14 +6,17 @@
   import {
     ancestors,
     csvToTable,
+    childId,
     expandAll,
+    findTables,
     flatten,
-    jsonToTable,
+    looksTabular,
     numericColumns,
     parseAny,
     pathText,
     preview,
     search,
+    tableAt,
     tableToJson,
     toCsv,
     valueAt,
@@ -21,6 +24,7 @@
     type Json,
     type Parsed,
     type Table,
+    type TableSpot,
     type TreeRow,
   } from '$lib/data/core';
   import { sampleCsv, sampleJson } from '$lib/data/samples';
@@ -71,6 +75,9 @@
     filter = '';
     sort = null;
     cell = null;
+    // 표로 볼 곳: 뿌리가 표면 뿌리, 아니면 문서에서 가장 얕은 곳의 배열
+    spots = p.kind === 'json' ? findTables(p.value) : [];
+    target = p.kind !== 'json' || tableAt(p.value) ? '' : (spots[0]?.id ?? '');
     if (p.kind === 'json' && Array.isArray(p.value) && p.value.length <= 2000) expanded = expandAll(p.value, 3000).expanded;
     else if (p.kind === 'json') expanded = levelSet(p.value, 2);
   }
@@ -103,10 +110,15 @@
   }
 
   // ── 데이터 ────────────────────────────────────────────
+  /** 문서에서 표로 볼 수 있는 곳들 */
+  let spots = $state.raw<TableSpot[]>([]);
+  /** 지금 표로 보는 곳 (뿌리는 '', 배열의 모든 항목은 *) */
+  let target = $state('');
+  const jtable = $derived(loaded?.data.kind === 'json' ? tableAt(loaded.data.value, target) : null);
   const table = $derived.by<Table | null>(() => {
     const d = loaded?.data;
     if (!d) return null;
-    return d.kind === 'csv' ? csvToTable(d.rows, header) : jsonToTable(d.value);
+    return d.kind === 'csv' ? csvToTable(d.rows, header) : jtable;
   });
   const root = $derived.by<Json>(() => {
     const d = loaded?.data;
@@ -177,10 +189,23 @@
     if (!r.complete) say('너무 커서 위쪽 단계까지만 펼쳤습니다');
   }
 
+  /** 키보드로 메뉴 열기 (메뉴 키 · Shift+F10): 고른 줄 · 칸 바로 아래에 띄운다 */
+  function menuKey(e: KeyboardEvent, at: string, items: () => MenuItem[]) {
+    if (e.key !== 'ContextMenu' && !(e.key === 'F10' && e.shiftKey)) return false;
+    const el = document.querySelector(at);
+    if (el) {
+      e.preventDefault();
+      const b = el.getBoundingClientRect();
+      openMenu(b.left + Math.min(b.width, 120), b.bottom, items());
+    }
+    return true;
+  }
+
   function onTreeKey(e: KeyboardEvent) {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const i = rows.findIndex((r) => r.id === selected);
     const r = rows[i];
+    if (r && menuKey(e, '.trow.sel', () => treeMenu(r))) return;
     let to = -1;
     if (e.key === 'ArrowDown') to = Math.min(rows.length - 1, i + 1);
     else if (e.key === 'ArrowUp') to = Math.max(0, i - 1);
@@ -238,12 +263,42 @@
   const tableWidth = $derived(widths.reduce((a, b) => a + b, NUMW));
   const cellValue = $derived(cell && table ? (table.rows[order[cell.row]]?.[cell.col] ?? '') : '');
 
+  // 표로 볼 곳 고르기
+  const spotLabel = (id: string, rows: number, nodes = 1) => `${pathText(root, id)} · ${num(rows)}행${nodes > 1 ? ` (${num(nodes)}곳)` : ''}`;
+  const places = $derived.by(() => {
+    if (loaded?.data.kind !== 'json') return [];
+    const out = spots.map((s) => ({ id: s.id, label: spotLabel(s.id, s.rows, s.nodes) }));
+    if (!out.some((o) => o.id === target) && jtable) out.unshift({ id: target, label: spotLabel(target, jtable.rows.length) });
+    return out;
+  });
+  function showTable(id: string) {
+    target = id;
+    mode = 'table';
+    filter = '';
+    sort = null;
+    cell = null;
+  }
+  /** 고른 칸이 원래 문서의 어느 노드인지 */
+  const cellId = $derived.by(() => {
+    const row = cell && jtable ? jtable.ids[order[cell.row]] : undefined;
+    if (!cell || !jtable || row === undefined) return null;
+    return (jtable.keys[cell.col] ?? []).reduce((id, k) => childId(id, k), row);
+  });
+  const cellNode = $derived(cellId === null ? undefined : valueAt(root, cellId));
+  function showInTree() {
+    if (cellId === null || !jtable || !cell) return;
+    const id = cellNode === undefined ? jtable.ids[order[cell.row]] : cellId;
+    mode = 'tree';
+    reveal(id);
+  }
+
   function sortBy(col: number) {
     sort = sort?.col !== col ? { col, dir: 1 } : sort.dir === 1 ? { col, dir: -1 } : null;
     cell = null;
   }
   function onTableKey(e: KeyboardEvent) {
     if (!cell || !table || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (menuKey(e, '.td.sel', tableMenu)) return;
     const d = { ArrowDown: [1, 0], ArrowUp: [-1, 0], ArrowRight: [0, 1], ArrowLeft: [0, -1], PageDown: [20, 0], PageUp: [-20, 0] }[e.key];
     if (!d) return;
     e.preventDefault();
@@ -260,8 +315,18 @@
       say('클립보드에 복사하지 못했습니다');
     }
   }
-  const base = () => (loaded?.name ? loaded.name.replace(/\.[^.]+$/, '') : `data-${timestamp()}`);
-  const viewJson = () => (mode === 'table' && table ? tableToJson({ columns: table.columns, rows: Array.from(order, (i) => table.rows[i]) }) : root);
+  const base = () => {
+    const name = loaded?.name ? loaded.name.replace(/\.[^.]+$/, '') : `data-${timestamp()}`;
+    // 문서의 일부를 표로 보고 있으면 어디인지 이름에 붙인다
+    const part = mode === 'table' && jtable ? target.split('/').filter((s) => s && s !== '*' && !/^\d+$/.test(s)).pop() : '';
+    return part ? `${name}-${part.replace(/~[012]|[\\/:*?"<>|]/g, '_')}` : name;
+  };
+  const viewJson = (): Json => {
+    if (mode !== 'table' || !table) return root;
+    // JSON 에서 온 표는 펼치기 전의 원래 항목을 그대로 낸다
+    if (jtable) return Array.from(order, (i) => valueAt(root, jtable.ids[i]) ?? null);
+    return tableToJson({ columns: table.columns, rows: Array.from(order, (i) => table.rows[i]) });
+  };
   function saveJson() {
     downloadBlob(new Blob([JSON.stringify(viewJson(), null, 2) + '\n'], { type: 'application/json' }), `${base()}.json`);
   }
@@ -269,6 +334,108 @@
     if (!table) return;
     // 엑셀이 한글을 알아보도록 BOM 을 붙인다
     downloadBlob(new Blob(['﻿' + toCsv(table, ',', mode === 'table' ? order : undefined)], { type: 'text/csv' }), `${base()}.csv`);
+  }
+
+  // ── 오른쪽 버튼 메뉴 ──────────────────────────────────
+  type MenuItem = { label: string; run: () => void } | null; // null 은 구분선
+  let menu = $state.raw<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  let menuEl = $state<HTMLDivElement>();
+
+  async function openMenu(x: number, y: number, items: MenuItem[]) {
+    menu = { x, y, items };
+    await tick();
+    if (!menuEl) return;
+    // 화면 밖으로 나가지 않게 당긴다
+    const r = menuEl.getBoundingClientRect();
+    menu = { items, x: Math.max(4, Math.min(x, innerWidth - r.width - 4)), y: Math.max(4, Math.min(y, innerHeight - r.height - 4)) };
+    menuEl.querySelector<HTMLButtonElement>('button')?.focus();
+  }
+  async function closeMenu(refocus = true) {
+    if (!menu) return;
+    menu = null;
+    if (!refocus) return;
+    await tick();
+    (mode === 'tree' ? treeList : tableList)?.focus();
+  }
+  function pick(item: MenuItem) {
+    menu = null;
+    item?.run();
+    tick().then(() => (mode === 'tree' ? treeList : tableList)?.focus());
+  }
+  function onMenuKey(e: KeyboardEvent) {
+    const buttons = [...(menuEl?.querySelectorAll('button') ?? [])];
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: buttons.length - 1 }[e.key];
+    if (e.key === 'Escape' || e.key === 'Tab') closeMenu();
+    else if (to !== undefined) buttons[(to + buttons.length) % buttons.length]?.focus();
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  const asText = (v: Json, pretty = true) => (typeof v === 'string' ? v : JSON.stringify(v, null, pretty ? 2 : 0));
+
+  function treeMenu(r: TreeRow): MenuItem[] {
+    const box = r.size >= 0;
+    const items: MenuItem[] = [{ label: box ? 'JSON 복사' : '값 복사', run: () => copy(asText(r.value), box ? 'JSON 을' : '값을') }];
+    if (box) items.push({ label: '한 줄로 복사', run: () => copy(JSON.stringify(r.value), '한 줄 JSON 을') });
+    if (typeof r.key === 'string') {
+      items.push({ label: '키 복사', run: () => copy(r.key as string, '키를') });
+      items.push({ label: '키와 값 복사', run: () => copy(`${JSON.stringify(r.key)}: ${JSON.stringify(r.value, null, 2)}`, '키와 값을') });
+    }
+    items.push({ label: '경로 복사', run: () => copy(pathText(root, r.id), '경로를') });
+    if (r.size > 0) {
+      items.push(null);
+      if (looksTabular(r.value)) items.push({ label: '표로 보기', run: () => showTable(r.id) });
+      items.push({
+        label: '아래 모두 펼치기',
+        run: () => {
+          const sub = expandAll(r.value);
+          expanded = new Set([...expanded, ...Array.from(sub.expanded, (id) => r.id + id)]);
+          if (!sub.complete) say('너무 커서 위쪽 단계까지만 펼쳤습니다');
+        },
+      });
+      items.push({ label: '아래 모두 접기', run: () => (expanded = new Set([...expanded].filter((id) => id !== r.id && !id.startsWith(r.id + '/')))) });
+      items.push({
+        label: '이 부분만 JSON 저장',
+        run: () => {
+          const name = loaded?.name ? loaded.name.replace(/\.[^.]+$/, '') : `data-${timestamp()}`;
+          const part = r.key === null ? '' : `-${String(r.key).replace(/[\\/:*?"<>|]/g, '_')}`;
+          downloadBlob(new Blob([JSON.stringify(r.value, null, 2) + '\n'], { type: 'application/json' }), `${name}${part}.json`);
+        },
+      });
+    }
+    if (!box && String(r.value) !== '') {
+      items.push(null);
+      items.push({ label: '같은 값 찾기', run: () => (query = String(r.value)) });
+    }
+    return items;
+  }
+
+  function tableMenu(): MenuItem[] {
+    if (!cell || !table) return [];
+    const t = table;
+    const r = order[cell.row];
+    const value = cellValue;
+    const rowJson = (): Json => (jtable ? (valueAt(root, jtable.ids[r]) ?? null) : tableToJson({ columns: t.columns, rows: [t.rows[r]] })[0]);
+    const items: MenuItem[] = [
+      { label: '값 복사', run: () => copy(value, '값을') },
+      { label: '행 복사 (JSON)', run: () => copy(JSON.stringify(rowJson(), null, 2), '행을') },
+      { label: '행 복사 (엑셀용)', run: () => copy(toCsv({ columns: t.columns, rows: [t.rows[r]] }, '\t').split('\n')[1] ?? '', '행을') },
+      { label: '열 이름 복사', run: () => copy(t.columns[cell!.col], '열 이름을') },
+    ];
+    if (cellId !== null) {
+      const id = cellId;
+      items.push({ label: '경로 복사', run: () => copy(pathText(root, cellNode === undefined ? jtable!.ids[r] : id), '경로를') });
+      items.push(null);
+      if (looksTabular(cellNode)) items.push({ label: '표로 열기', run: () => showTable(id) });
+      items.push({ label: '트리에서 보기', run: showInTree });
+    }
+    if (value !== '') {
+      if (cellId === null) items.push(null);
+      items.push({ label: '이 값으로 거르기', run: () => ((filter = value), (cell = null)) });
+    }
+    return items;
   }
 
   function onWindowKey(e: KeyboardEvent) {
@@ -291,7 +458,13 @@
   }
 </script>
 
-<svelte:window onkeydown={onWindowKey} />
+<svelte:window
+  onkeydown={onWindowKey}
+  onpointerdown={(e) => menu && !menuEl?.contains(e.target as Node) && closeMenu(false)}
+  onwheel={() => closeMenu(false)}
+  onresize={() => closeMenu(false)}
+  onblur={() => closeMenu(false)}
+/>
 
 <ToolShell tool="data">
   {#snippet actions()}
@@ -368,7 +541,7 @@
       <div class="bar">
         <div class="seg" role="group" aria-label="보기 방식">
           <button aria-pressed={mode === 'tree'} onclick={() => (mode = 'tree')}>트리</button>
-          <button aria-pressed={mode === 'table'} disabled={!table} title={table ? '' : '객체의 배열일 때만 표로 볼 수 있습니다'} onclick={() => (mode = 'table')}>표</button>
+          <button aria-pressed={mode === 'table'} disabled={!table} title={table ? '' : '객체의 배열이 있어야 표로 볼 수 있습니다'} onclick={() => (mode = 'table')}>표</button>
         </div>
         {#if mode === 'tree'}
           <div class="find">
@@ -382,6 +555,11 @@
           <button class="btn sm" onclick={openAll}>모두 펼치기</button>
           <button class="btn sm" onclick={() => (expanded = new Set(['']))}>모두 접기</button>
         {:else if table}
+          {#if places.length > 1 || target}
+            <select class="field place" aria-label="표로 볼 곳" title="문서에서 표로 볼 수 있는 곳" value={target} onchange={(e) => showTable(e.currentTarget.value)}>
+              {#each places as p (p.id)}<option value={p.id}>{p.label}</option>{/each}
+            </select>
+          {/if}
           <div class="find">
             <input class="field" bind:this={searchEl} bind:value={filter} onkeydown={onSearchKey} placeholder="행 거르기 (Ctrl+F)" aria-label="거르기" />
           </div>
@@ -417,6 +595,11 @@
                 style:padding-left="{r.depth * 18 + 6}px"
                 onclick={() => (selected = r.id)}
                 ondblclick={() => toggle(r)}
+                oncontextmenu={(e) => {
+                  e.preventDefault();
+                  selected = r.id;
+                  openMenu(e.clientX, e.clientY, treeMenu(r));
+                }}
               >
                 {#if r.size > 0}
                   <button class="caret" class:open={r.open} tabindex="-1" aria-label={r.open ? '접기' : '펼치기'} onclick={(e) => (e.stopPropagation(), (selected = r.id), toggle(r))}>
@@ -428,6 +611,9 @@
                 {#if r.key !== null}<span class={typeof r.key === 'number' ? 'idx' : 'key'}>{r.key}</span><span class="colon">:</span>{/if}
                 {#if r.size >= 0}
                   <span class="meta">{t === 'array' ? `[${num(r.size)}]` : `{${num(r.size)}}`}</span>
+                  {#if looksTabular(r.value)}
+                    <button class="totable" tabindex="-1" aria-label="이 배열을 표로 보기" title="이 배열을 표로 보기" onclick={(e) => (e.stopPropagation(), showTable(r.id))}>표</button>
+                  {/if}
                   {#if !r.open && r.size > 0}<span class="pv">{preview(r.value)}</span>{/if}
                 {:else}
                   <span class="v {t}">{shown(r.value)}</span>
@@ -455,7 +641,13 @@
                 <span class="td n" style:width="{NUMW}px">{num(order[i] + 1)}</span>
                 {#each r as v, c (c)}
                   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-                  <span class="td" class:num={numeric[c]} class:sel={cell?.row === i && cell.col === c} style:width="{widths[c]}px" onclick={() => (cell = { row: i, col: c })}>{v}</span>
+                  <span class="td" class:num={numeric[c]} class:sel={cell?.row === i && cell.col === c} style:width="{widths[c]}px" onclick={() => (cell = { row: i, col: c })}
+                    oncontextmenu={(e) => {
+                      e.preventDefault();
+                      cell = { row: i, col: c };
+                      openMenu(e.clientX, e.clientY, tableMenu());
+                    }}
+                    ondblclick={() => looksTabular(cellNode) && cellId !== null && showTable(cellId)}>{v}</span>
                 {/each}
               </div>
             {/if}
@@ -473,12 +665,28 @@
         {:else if cell && table}
           <b class="where">{table.columns[cell.col]} · {num(order[cell.row] + 1)}행</b>
           <code class="path">{cellValue.length > 600 ? cellValue.slice(0, 600) + '…' : cellValue}</code>
+          {#if cellId !== null}
+            {#if looksTabular(cellNode)}<button class="btn sm ghost" onclick={() => showTable(cellId)} title="이 칸의 배열을 표로 엽니다 (두 번 눌러도 됩니다)">표로 열기</button>{/if}
+            <button class="btn sm ghost" onclick={showInTree}>트리에서 보기</button>
+          {/if}
           <button class="btn sm ghost" onclick={() => copy(cellValue, '값을')}>값 복사</button>
         {:else}
           <span class="hint">칸을 누르면 전체 내용을 여기에 보여 줍니다. 제목을 누르면 정렬합니다.</span>
         {/if}
       </div>
     </div>
+    {#if menu}
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="menu" role="menu" tabindex="-1" bind:this={menuEl} style:left="{menu.x}px" style:top="{menu.y}px" onkeydown={onMenuKey} oncontextmenu={(e) => e.preventDefault()}>
+        {#each menu.items as item, i (i)}
+          {#if item}
+            <button role="menuitem" tabindex="-1" onclick={() => pick(item)}>{item.label}</button>
+          {:else}
+            <hr />
+          {/if}
+        {/each}
+      </div>
+    {/if}
   {/if}
 </ToolShell>
 
@@ -585,6 +793,13 @@
     width: 28px;
     padding: 0;
   }
+  .place {
+    height: 28px;
+    max-width: 320px;
+    padding: 0 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
   .count {
     font-size: 12.5px;
     color: var(--muted);
@@ -690,6 +905,22 @@
   .meta {
     color: var(--faint);
     font-size: 11.5px;
+  }
+  .totable {
+    flex: none;
+    height: 18px;
+    margin-left: 6px;
+    padding: 0 6px;
+    border: 1px solid var(--border-strong);
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--muted);
+    font: 600 11px/1 var(--font);
+  }
+  .totable:hover {
+    border-color: var(--app);
+    color: var(--app);
+    background: var(--app-soft);
   }
   .pv {
     margin-left: 8px;
@@ -852,6 +1083,39 @@
     color: var(--faint);
   }
 
+  .menu {
+    position: fixed;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    min-width: 176px;
+    padding: 5px;
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    background: var(--surface);
+    box-shadow: 0 10px 30px rgb(0 0 0 / 0.18);
+  }
+  .menu button {
+    height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    background: none;
+    font-size: 13px;
+    text-align: left;
+    white-space: nowrap;
+  }
+  .menu button:hover,
+  .menu button:focus-visible {
+    background: var(--app-soft);
+    outline: none;
+  }
+  .menu hr {
+    margin: 4px 6px;
+    border: 0;
+    border-top: 1px solid var(--border);
+  }
+
   @media (max-width: 760px) {
     .chip {
       display: none;
@@ -866,6 +1130,9 @@
       flex: 1;
       width: auto;
       min-width: 120px;
+    }
+    .place {
+      max-width: 100%;
     }
     .right {
       margin-left: 0;

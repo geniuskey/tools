@@ -422,8 +422,50 @@ test('데이터 뷰어', async () => {
   assert.equal(await page.locator('.trow').count(), 6);
   await page.getByRole('button', { name: '모두 펼치기' }).click();
   await page.waitForFunction(() => document.querySelectorAll('.trow').length > 20);
-  // 뿌리가 객체라 표로는 볼 수 없다
-  assert.ok(await page.getByRole('button', { name: '표', exact: true }).isDisabled());
+  // 줄에서 오른쪽 버튼: 복사 · 아래 펼치기 · 표로 보기
+  await page.getByRole('button', { name: '모두 접기' }).click();
+  await page.locator('.trow', { hasText: 'orders' }).click({ button: 'right' });
+  assert.deepEqual(await page.getByRole('menuitem').allInnerTexts(), ['JSON 복사', '한 줄로 복사', '키 복사', '키와 값 복사', '경로 복사', '표로 보기', '아래 모두 펼치기', '아래 모두 접기', '이 부분만 JSON 저장']);
+  await page.screenshot({ path: `${SHOTS}/data-menu.png` });
+  await page.getByRole('menuitem', { name: '경로 복사' }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '$.orders');
+  assert.equal(await page.getByRole('menu').count(), 0);
+  await page.keyboard.press('Shift+F10');
+  await page.getByRole('menuitem', { name: '아래 모두 펼치기' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.trow').length > 20);
+  await page.locator('.trow', { hasText: '"서울"' }).first().click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '값 복사', exact: true }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '서울');
+  await page.locator('.trow').first().click({ button: 'right' });
+  await page.keyboard.press('Escape');
+  assert.equal(await page.getByRole('menu').count(), 0);
+  // 뿌리가 객체여도 안에 든 배열을 표로 본다
+  await page.getByRole('button', { name: '표', exact: true }).click();
+  await page.locator('.tr').first().waitFor();
+  assert.match(await page.locator('.bar .count').innerText(), /^240행 · 9열$/);
+  assert.deepEqual(await page.getByLabel('표로 볼 곳').locator('option').allInnerTexts(), ['$.orders · 240행', '$.orders[*].items · 480행 (240곳)']);
+  // 주문마다 흩어진 items 를 한 표로
+  await page.getByLabel('표로 볼 곳').selectOption('/orders/*/items');
+  await page.waitForFunction(() => /^480행 · 4열$/.test(document.querySelector('.bar .count')?.textContent ?? ''));
+  assert.deepEqual(await page.locator('.th span').allInnerTexts(), ['orders[*]', 'name', 'qty', 'price']);
+  await page.screenshot({ path: `${SHOTS}/data-subtable.png` });
+  // 칸에서 오른쪽 버튼: 행을 원래 JSON 으로 복사
+  await page.locator('.tr').nth(2).locator('.td').nth(2).click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '행 복사 (JSON)' }).click();
+  assert.deepEqual(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())), { name: '마우스', qty: 3, price: 82000 });
+  // 칸 → 트리의 같은 자리
+  await page.locator('.tr').nth(2).locator('.td').nth(2).click();
+  await page.getByRole('button', { name: '트리에서 보기' }).click();
+  await page.locator('.trow.sel').waitFor();
+  assert.equal(await page.locator('.status .path').innerText(), '$.orders[1].items[1].name');
+  // 트리의 배열 → 그 배열만 표로
+  await page.locator('.trow:has(.totable)', { hasText: 'items' }).first().locator('.totable').click();
+  await page.waitForFunction(() => /^\d행 · 3열$/.test(document.querySelector('.bar .count')?.textContent ?? ''));
+  assert.match(await page.getByLabel('표로 볼 곳').locator('option:checked').innerText(), /^\$\.orders\[\d+\]\.items · \d행$/);
+  // 표 안의 배열 칸을 두 번 눌러 들어간다
+  await page.getByLabel('표로 볼 곳').selectOption('/orders');
+  await page.locator('.tr').first().locator('.td').nth(6).dblclick();
+  await page.waitForFunction(() => /^1행 · 3열$/.test(document.querySelector('.bar .count')?.textContent ?? ''));
 
   // CSV 예시: 표
   await page.getByRole('button', { name: '다른 데이터' }).click();

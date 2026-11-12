@@ -206,15 +206,54 @@ function cellText(v: Json): string {
   return String(v);
 }
 
-/** 객체(또는 값)의 배열을 표로 바꾼다. 안쪽 객체는 a.b 처럼 펼친다. 표로 볼 수 없으면 null. */
-export function jsonToTable(value: Json): Table | null {
-  if (!Array.isArray(value) || !value.length) return null;
-  const index = new Map<string, number>();
+/** JSON 에서 만든 표. 줄과 칸이 원래 문서의 어디인지 기억한다. */
+export interface JsonTable extends Table {
+  /** 줄마다 원래 노드 이름 */
+  ids: string[];
+  /** 열마다 줄 노드 아래의 키 경로. 위치를 알려 주는 열([*])이면 null */
+  keys: (string[] | null)[];
+}
+
+const NO_KEYS: string[] = [];
+
+/**
+ * pattern 이 가리키는 배열(들)을 표로 바꾼다. 안쪽 객체는 a.b 처럼 펼친다.
+ * pattern 의 * 는 배열의 모든 항목: $.orders[*].items 꼴이면 주문마다 있는 items 를 한 표로 잇고,
+ * 어느 주문의 것인지를 앞쪽 열에 적는다. 표로 볼 수 없으면 null.
+ */
+export function tableAt(root: Json, pattern = ''): JsonTable | null {
+  const segs = pattern ? pattern.slice(1).split('/') : [];
+  let nodes: { value: Json; id: string; lead: string[] }[] = [{ value: root, id: '', lead: [] }];
   const columns: string[] = [];
+  const keys: (string[] | null)[] = [];
+  segs.forEach((raw, s) => {
+    const next: typeof nodes = [];
+    if (raw === '*') {
+      columns.push(`${s && segs[s - 1] !== '*' ? unescKey(segs[s - 1]) : ''}[*]`);
+      keys.push(null);
+    }
+    for (const n of nodes) {
+      const v = n.value;
+      if (raw === '*') {
+        if (Array.isArray(v)) for (let i = 0; i < v.length; i++) next.push({ value: v[i], id: `${n.id}/${i}`, lead: [...n.lead, String(i)] });
+      } else if (Array.isArray(v)) {
+        if (v[+raw] !== undefined) next.push({ value: v[+raw], id: `${n.id}/${raw}`, lead: n.lead });
+      } else if (isBox(v)) {
+        const k = unescKey(raw);
+        if (Object.prototype.hasOwnProperty.call(v, k)) next.push({ value: v[k], id: `${n.id}/${raw}`, lead: n.lead });
+      }
+    }
+    nodes = next;
+  });
+
+  const leads = columns.length;
+  const index = new Map<string, number>();
   const rows: string[][] = [];
-  const put = (row: string[], name: string, v: Json) => {
+  const ids: string[] = [];
+  const put = (row: string[], name: string, prefix: string[], k: string | null, v: Json) => {
     if (v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length) {
-      for (const k of Object.keys(v)) put(row, `${name}.${k}`, v[k]);
+      const path = k === null ? prefix : [...prefix, k];
+      for (const k2 of Object.keys(v)) put(row, `${name}.${k2}`, path, k2, v[k2]);
       return;
     }
     let c = index.get(name);
@@ -222,21 +261,93 @@ export function jsonToTable(value: Json): Table | null {
       c = columns.length;
       index.set(name, c);
       columns.push(name);
+      keys.push(k === null ? prefix : [...prefix, k]);
     }
     row[c] = cellText(v);
   };
   let objects = 0;
-  for (const item of value) {
-    const row: string[] = [];
-    if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
-      objects++;
-      for (const k of Object.keys(item)) put(row, k, item[k]);
-    } else put(row, '값', item);
-    rows.push(row);
+  let lists = 0;
+  for (const n of nodes) {
+    if (!Array.isArray(n.value)) continue;
+    for (let i = 0; i < n.value.length; i++) {
+      const item = n.value[i];
+      const row: string[] = n.lead.slice();
+      if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+        objects++;
+        for (const k of Object.keys(item)) put(row, k, NO_KEYS, k, item[k]);
+      } else {
+        if (Array.isArray(item)) lists++;
+        put(row, '값', NO_KEYS, null, item);
+      }
+      rows.push(row);
+      ids.push(`${n.id}/${i}`);
+    }
   }
-  if (!objects && value.some((v) => Array.isArray(v))) return null;
-  for (const r of rows) for (let i = 0; i < columns.length; i++) r[i] ??= '';
-  return { columns, rows };
+  if (!rows.length || (!objects && lists)) return null;
+  for (const r of rows) for (let i = leads; i < columns.length; i++) r[i] ??= '';
+  return { columns, rows, ids, keys };
+}
+
+/** 객체(또는 값)의 배열을 표로 바꾼다. 표로 볼 수 없으면 null. */
+export function jsonToTable(value: Json): Table | null {
+  const t = tableAt(value);
+  return t && { columns: t.columns, rows: t.rows };
+}
+
+/** 객체가 줄지어 있는 배열인지 (list[dict]). 큰 배열은 앞쪽만 본다. */
+export function looksTabular(value: Json | undefined, sample = 50): value is Json[] {
+  if (!Array.isArray(value) || !value.length) return false;
+  const n = Math.min(value.length, sample);
+  let objects = 0;
+  for (let i = 0; i < n; i++) {
+    const v = value[i];
+    if (Array.isArray(v)) return false;
+    if (v !== null && typeof v === 'object') objects++;
+  }
+  return objects * 2 >= n;
+}
+
+export interface TableSpot {
+  /** tableAt 에 넘길 이름. 배열 항목 자리는 * */
+  id: string;
+  /** 합친 줄 수 */
+  rows: number;
+  /** 이 모양으로 흩어져 있는 배열의 수 */
+  nodes: number;
+}
+
+/** 문서를 훑어 표로 볼 만한 곳을 얕은 곳부터 찾는다. 같은 자리에 반복되는 배열은 하나로 묶는다. */
+export function findTables(root: Json, budget = 3_000_000, limit = 60): TableSpot[] {
+  const found = new Map<string, TableSpot>();
+  let level: [Json, string][] = isBox(root) ? [[root, '']] : [];
+  let seen = 0;
+  while (level.length && seen < budget) {
+    const next: [Json, string][] = [];
+    for (const [value, id] of level) {
+      if (seen >= budget) break;
+      if (Array.isArray(value)) {
+        if (looksTabular(value)) {
+          let spot = found.get(id);
+          if (!spot && found.size < limit) found.set(id, (spot = { id, rows: 0, nodes: 0 }));
+          if (spot) {
+            spot.rows += value.length;
+            spot.nodes++;
+          }
+        }
+        seen += value.length;
+        const child = `${id}/*`;
+        for (const v of value) if (isBox(v)) next.push([v, child]);
+      } else {
+        for (const k of Object.keys(value as object)) {
+          seen++;
+          const v = (value as { [k: string]: Json })[k];
+          if (isBox(v)) next.push([v, childId(id, k)]);
+        }
+      }
+    }
+    level = next;
+  }
+  return [...found.values()];
 }
 
 const NUMBER = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/;
@@ -320,9 +431,11 @@ export interface TreeRow {
 }
 
 // 노드 이름은 JSON Pointer (RFC 6901) 와 같다. 뿌리는 ''.
-const escKey = (k: string | number) => String(k).replace(/~/g, '~0').replace(/\//g, '~1');
+// 다만 * 는 "배열의 모든 항목" 을 뜻하는 자리로 쓰려고, 키에 든 * 는 ~2 로 적는다.
+const escKey = (k: string | number) => String(k).replace(/~/g, '~0').replace(/\//g, '~1').replace(/\*/g, '~2');
+const unescKey = (s: string) => s.replace(/~[012]/g, (m) => (m === '~0' ? '~' : m === '~1' ? '/' : '*'));
 export const childId = (parent: string, key: string | number) => `${parent}/${escKey(key)}`;
-export const idKeys = (id: string) => (id ? id.slice(1).split('/').map((s) => s.replace(/~1/g, '/').replace(/~0/g, '~')) : []);
+export const idKeys = (id: string) => (id ? id.slice(1).split('/').map(unescKey) : []);
 
 const isBox = (v: Json): v is Json[] | { [k: string]: Json } => v !== null && typeof v === 'object';
 export const sizeOf = (v: Json) => (Array.isArray(v) ? v.length : isBox(v) ? Object.keys(v).length : -1);
@@ -408,12 +521,16 @@ export function valueAt(root: Json, id: string): Json | undefined {
   return cur;
 }
 
-/** 코드에 붙여넣을 수 있는 경로: $.items[0]["이름 with space"] */
+/** 코드에 붙여넣을 수 있는 경로: $.items[0]["이름 with space"]. 모든 항목 자리는 [*] */
 export function pathText(root: Json, id: string): string {
   let out = '$';
   let cur: Json | undefined = root;
-  for (const k of idKeys(id)) {
-    if (Array.isArray(cur)) {
+  for (const raw of id ? id.slice(1).split('/') : []) {
+    const k = unescKey(raw);
+    if (raw === '*') {
+      out += '[*]';
+      cur = Array.isArray(cur) ? cur.find(isBox) : undefined;
+    } else if (Array.isArray(cur)) {
       out += `[${k}]`;
       cur = cur[+k];
     } else {

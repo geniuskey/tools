@@ -2,10 +2,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ancestors,
+  childId,
   csvToTable,
   detectDelimiter,
   jsonErrorOffset,
   expandAll,
+  findTables,
+  looksTabular,
+  tableAt,
   flatten,
   jsonToTable,
   numericColumns,
@@ -136,4 +140,50 @@ test('큰 입력도 빠르게', () => {
   const json = tableToJson(table);
   assert.equal(flatten(json, expandAll(json, 1_000_000).expanded).length, 800_001);
   assert.ok(Date.now() - t0 < 6000, `${Date.now() - t0}ms`);
+});
+
+test('문서 안의 표 찾기 · 영역별 표', () => {
+  const doc: Json = {
+    shop: 'x',
+    tags: ['a', 'b'],
+    orders: [
+      { id: 1, who: { name: '김' }, items: [{ n: '키보드', qty: 1 }, { n: '의자', qty: 2 }] },
+      { id: 2, who: { name: '이' }, items: [{ n: '책상', qty: 1, 'a*b': true }] },
+      { id: 3, who: { name: '박' }, items: [] },
+    ],
+    matrix: [[1, 2], [3, 4]],
+  };
+  assert.deepEqual(findTables(doc), [
+    { id: '/orders', rows: 3, nodes: 1 },
+    { id: '/orders/*/items', rows: 3, nodes: 2 },
+  ]);
+  assert.deepEqual(findTables([{ a: [{ b: 1 }] }, { a: [{ b: 2 }] }]).map((s) => s.id), ['', '/*/a']);
+  assert.deepEqual(findTables('글자'), []);
+  assert.ok(looksTabular([{ a: 1 }, null]));
+  assert.ok(!looksTabular([1, 2, { a: 1 }]));
+  assert.ok(!looksTabular([]));
+
+  const one = tableAt(doc, '/orders')!;
+  assert.deepEqual(one.columns, ['id', 'who.name', 'items']);
+  assert.deepEqual(one.ids, ['/orders/0', '/orders/1', '/orders/2']);
+  assert.deepEqual(one.keys, [['id'], ['who', 'name'], ['items']]);
+
+  // 흩어진 배열을 한 표로: 어디서 왔는지가 앞 열에 붙는다
+  const all = tableAt(doc, '/orders/*/items')!;
+  assert.deepEqual(all.columns, ['orders[*]', 'n', 'qty', 'a*b']);
+  assert.deepEqual(all.rows, [['0', '키보드', '1', ''], ['0', '의자', '2', ''], ['1', '책상', '1', 'true']]);
+  assert.deepEqual(all.ids, ['/orders/0/items/0', '/orders/0/items/1', '/orders/1/items/0']);
+  assert.deepEqual(all.keys, [null, ['n'], ['qty'], ['a*b']]);
+  assert.equal(valueAt(doc, all.keys[3]!.reduce((id, k) => childId(id, k), all.ids[2])), true);
+  assert.equal(pathText(doc, '/orders/*/items'), '$.orders[*].items');
+  assert.equal(pathText([[{ a: 1 }]], '/*/*'), '$[*][*]');
+
+  assert.deepEqual(tableAt(doc, '/orders/1/items')!.rows, [['책상', '1', 'true']]);
+  assert.deepEqual(tableAt(doc, '/tags')!.rows, [['a'], ['b']]);
+  assert.equal(tableAt(doc, '/matrix'), null);
+  assert.equal(tableAt(doc, '/nope'), null);
+  assert.equal(tableAt(doc, '/orders/2/items'), null);
+  // 키에 든 * 는 모든 항목 자리와 섞이지 않는다
+  assert.equal(childId('', '*'), '/~2');
+  assert.deepEqual(tableAt({ '*': [{ a: 1 }] }, '/~2')!.rows, [['1']]);
 });
