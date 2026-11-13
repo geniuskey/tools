@@ -11,7 +11,7 @@ export class TimerStore {
   /** 저장된 상태를 불러오고 다른 창의 변경을 듣는다. 정리 함수를 돌려준다. */
   init(): () => void {
     const saved = load<unknown>(KEY, null);
-    if (isShared(saved)) this.s = { ...initial(), ...saved };
+    if (isShared(saved)) this.s = { ...initial(), anchor: 0, span: 0, ...saved };
     if (typeof BroadcastChannel !== 'undefined') {
       this.channel = new BroadcastChannel('tools:timer');
       this.channel.onmessage = (e) => {

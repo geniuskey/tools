@@ -4,7 +4,7 @@
   import Stage from '$lib/timer/Stage.svelte';
   import { TimerStore } from '$lib/timer/store.svelte';
   import { tone, unlock } from '$lib/raffle/sound';
-  import { adjust, advance, clockText, durationText, goto, initial, parseAgenda, pause, phaseOf, remaining, retext, sampleText, schedule, start, type OverMode, type Shared } from '$lib/timer/core';
+  import { adjust, advance, clockText, durationText, goto, segText, initial, parseAgenda, pause, phaseOf, remaining, retext, sampleText, schedule, start, type OverMode, type Shared } from '$lib/timer/core';
 
   const store = new TimerStore();
   const s = $derived(store.s);
@@ -17,6 +17,18 @@
   let stageEl = $state<HTMLElement>();
   let fullscreen = $state(false);
   let draft = $state('');
+  let help = $state<HTMLDialogElement>();
+
+  /** 작성법 예시: 오른쪽 칸은 실제로 읽어서 보여 준다 */
+  const examples: [string, string][] = [
+    ['발표 15', '숫자만 쓰면 분'],
+    ['질의응답 5:30', '분:초'],
+    ['1부 1시간 30분', '1h 30m · 90초 도 됩니다'],
+    ['점심 13:30까지', '그 시각까지 (~13:30 · @13:30 도 같음)'],
+    ['2부 오후 2시 반까지', '오전 · 오후, 9pm 도 됩니다'],
+    ['여는 말', '시간을 안 쓰면 5분'],
+  ];
+  const guideSample = '등록 · 대기 ~10:00\n여는 말 5\n발표 20\n질의응답 10\n쉬는 시간 ~10:50\n2부 발표 25\n마무리 5';
 
   // 다른 창에서 상태가 바뀌어 들어오면 시계도 그 순간으로 맞춘다 (낡은 시각으로 계산하면 1초 어긋나 보인다)
   $effect(() => {
@@ -27,15 +39,17 @@
   const rem = $derived(remaining(s, now));
   const seg = $derived(agenda[s.index]);
   const phase = $derived(phaseOf(rem, s.warn));
-  const total = $derived((seg?.seconds ?? 0) * 1000);
+  const total = $derived(Math.max(0, s.span || (seg?.seconds ?? 0) * 1000));
   const finished = $derived(!s.running && rem <= 0 && s.index >= agenda.length - 1 && s.over !== 'count');
   const ends = $derived(schedule(s, agenda, now));
   const hhmm = (t: number) => new Date(t).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
   const nextText = $derived.by(() => {
     const n = agenda[s.index + 1];
-    return n ? `다음 · ${n.name} (${durationText(n.seconds)})` : agenda.length > 1 ? '마지막 순서' : '';
+    return n ? `다음 · ${n.name} (${segText(n)})` : agenda.length > 1 ? '마지막 순서' : '';
   });
   const sum = $derived(agenda.reduce((n, a) => n + a.seconds, 0));
+  /** 시각으로 끝나는 줄이 있으면 길이의 합 대신 끝나는 시각을 보여 준다 */
+  const timed = $derived(agenda.some((a) => a.at != null));
 
   const set = (next: Shared) => store.set(next);
   const act = {
@@ -174,8 +188,8 @@
     <div class="page">
       <section class="panel">
         <div class="head">
-          <h2>순서표</h2>
-          <span class="sum">{agenda.length}개 · {durationText(sum)}</span>
+          <h2>순서표 <button class="help" onclick={() => (help?.showModal(), help && (help.scrollTop = 0))} title="순서표 쓰는 법" aria-label="순서표 쓰는 법">?</button></h2>
+          <span class="sum">{agenda.length}개 · {timed ? (mounted && ends.at(-1) ? `${hhmm(ends.at(-1)!)} 끝` : '') : durationText(sum)}</span>
         </div>
         <textarea
           class="field"
@@ -183,7 +197,7 @@
           oninput={(e) => set(retext(s, e.currentTarget.value, Date.now()))}
           spellcheck="false"
           aria-label="순서표"
-          placeholder={'한 줄에 하나씩: 이름 시간\n\n발표 15\n질의응답 5:30\n쉬는 시간 10분\n\n숫자만 쓰면 분입니다.'}
+          placeholder={'한 줄에 하나씩: 이름 시간\n\n발표 15\n질의응답 5:30\n쉬는 시간 14:30까지\n\n숫자만 쓰면 분, 5:30 은 5분 30초.\n시각까지는 14:30까지 · ~14:30 · 오후 2시 반까지'}
         ></textarea>
         {#if agenda.length}
           <ol class="list">
@@ -192,7 +206,7 @@
                 <button class:cur={i === s.index} class:past={i < s.index} onclick={() => act.go(i)} title="이 순서로 이동">
                   <span class="no">{i + 1}</span>
                   <span class="nm">{a.name}</span>
-                  <span class="du" class:guess={a.guessed} title={a.guessed ? '시간을 적지 않아 5분으로 잡았습니다' : ''}>{durationText(a.seconds)}</span>
+                  <span class="du" class:guess={a.guessed} title={a.guessed ? '시간을 적지 않아 5분으로 잡았습니다' : a.flex ? '오전·오후를 적지 않아 가까운 쪽으로 잡습니다' : ''}>{segText(a)}</span>
                   <span class="at">{ends[i] && mounted ? `~${hhmm(ends[i]!)}` : ''}</span>
                 </button>
               </li>
@@ -221,7 +235,7 @@
         </label>
         <label class="check"><input type="checkbox" checked={s.sound} onchange={(e) => set({ ...s, sound: e.currentTarget.checked })} /> 경고 · 종료 소리</label>
         <label class="check"><input type="checkbox" checked={s.clock} onchange={(e) => set({ ...s, clock: e.currentTarget.checked })} /> 지금 시각 표시</label>
-        <button class="btn sm ghost danger reset" onclick={() => (set({ ...initial(), text: s.text, left: (agenda[0]?.seconds ?? 300) * 1000 }), (draft = ''))}>처음 상태로</button>
+        <button class="btn sm ghost danger reset" onclick={() => (set(initial(s.text, Date.now())), (draft = ''))}>처음 상태로</button>
       </section>
 
       <section class="main">
@@ -232,7 +246,7 @@
 
         <div class="controls">
           <button class="btn" onclick={() => act.go(s.index - 1)} disabled={s.index === 0} title="이전 순서 (←)">◀ 이전</button>
-          <button class="btn primary go" onclick={act.toggle} disabled={!agenda.length} title="Space">{s.running ? '일시 정지' : rem < total && rem > 0 ? '이어서' : '시작'}</button>
+          <button class="btn primary go" onclick={act.toggle} disabled={!agenda.length} title="Space">{s.running ? '일시 정지' : !s.anchor && rem < total && rem > 0 ? '이어서' : '시작'}</button>
           <button class="btn" onclick={() => act.go(s.index + 1)} disabled={s.index >= agenda.length - 1} title="다음 순서 (→)">다음 ▶</button>
           <span class="gap"></span>
           <button class="btn" onclick={() => act.add(-60_000)} title="1분 줄이기 (↓)">−1분</button>
@@ -262,6 +276,39 @@
       </section>
     </div>
   </ToolShell>
+
+  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+  <dialog bind:this={help} class="guide app-scope" aria-label="순서표 쓰는 법" onclick={(e) => e.target === help && help.close()}>
+    <h2>순서표 쓰는 법</h2>
+    <p>한 줄에 순서 하나, <b>이름 뒤에 시간</b>을 씁니다. 엑셀에서 두 칸을 복사해 붙여 넣어도 됩니다.</p>
+    <table>
+      <thead><tr><th>이렇게 쓰면</th><th>이렇게 읽습니다</th></tr></thead>
+      <tbody>
+        {#each examples as [line, note] (line)}
+          {@const g = parseAgenda(line)[0]}
+          <tr>
+            <td><code>{line}</code></td>
+            <td><b>{g.name}</b> · {segText(g)}<small>{note}</small></td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+    <h3>길이와 시각</h3>
+    <ul>
+      <li><b>길이</b> (<code>15</code>, <code>5:30</code>)는 그 순서가 시작한 때부터 셉니다. 앞 순서가 늦어지면 뒤도 같이 밀립니다.</li>
+      <li><b>시각</b> (<code>13:30까지</code>)은 앞이 늦어져도 그 시각에 끝납니다. 늦어진 만큼 이 순서가 짧아져서, 쉬는 시간이나 점심으로 일정을 다시 맞출 때 좋습니다.</li>
+      <li>시각을 쓰려면 앞에 <code>~</code> · <code>@</code>나 뒤에 <code>까지</code>를 붙입니다. 그냥 <code>13:30</code>은 13분 30초입니다.</li>
+      <li>오전 · 오후를 안 쓰면 (<code>2시까지</code>) 지금과 가까운 쪽으로 잡습니다. <code>09:00</code>처럼 0을 붙이거나 13시 이후는 그대로 24시간제입니다.</li>
+      <li>첫 줄을 시각으로 두면 (<code>대기 ~10:00</code>) 시작을 누르기 전에도 그 시각까지 줄어들어 행사 전 대기 화면으로 쓸 수 있습니다.</li>
+      <li>시각 순서에서 일시 정지나 ±1분을 누르면 시각에서 풀려 보통 타이머가 됩니다. <kbd>R</kbd>(다시)을 누르면 시각으로 돌아갑니다.</li>
+    </ul>
+    <h3>예시</h3>
+    <pre>{guideSample}</pre>
+    <div class="actions">
+      <button class="btn" onclick={() => (set(retext(s, guideSample, Date.now())), help?.close())}>이 예시로 바꾸기</button>
+      <button class="btn primary" onclick={() => help?.close()}>닫기</button>
+    </div>
+  </dialog>
 {/if}
 
 <style>
@@ -314,7 +361,108 @@
     justify-content: space-between;
   }
   .panel h2 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 15px;
+  }
+  .help {
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .help:hover {
+    border-color: var(--app);
+    color: var(--app);
+  }
+
+  .guide {
+    width: min(560px, calc(100vw - 32px));
+    max-height: calc(100dvh - 32px);
+    padding: 22px;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-lg);
+    --app: var(--c-timer);
+  }
+  .guide::backdrop {
+    background: rgb(0 0 0 / 0.4);
+  }
+  .guide h2 {
+    font-size: 17px;
+    margin-bottom: 6px;
+  }
+  .guide h3 {
+    font-size: 14px;
+    margin: 16px 0 6px;
+  }
+  .guide p,
+  .guide li {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--muted);
+  }
+  .guide b {
+    color: var(--text);
+  }
+  .guide ul {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 4px;
+  }
+  .guide table {
+    width: 100%;
+    margin-top: 10px;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .guide th {
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--faint);
+    padding: 0 8px 4px 0;
+  }
+  .guide td {
+    padding: 6px 8px 6px 0;
+    border-top: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .guide td:first-child {
+    white-space: nowrap;
+  }
+  .guide small {
+    display: block;
+    font-size: 11.5px;
+    color: var(--faint);
+  }
+  .guide code,
+  .guide pre {
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 12.5px;
+  }
+  .guide pre {
+    margin: 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    line-height: 1.6;
+  }
+  .guide .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
   }
   .sub {
     margin-top: 8px;

@@ -722,10 +722,18 @@ test('QR 코드', async () => {
 test('행사 타이머', async () => {
   const { browser, page, errors } = await open('/timer');
   const time = () => page.locator('.stage-box .time').innerText();
-  const sheet = page.getByLabel('순서표');
+  const sheet = page.getByLabel('순서표', { exact: true });
   assert.equal(await time(), '5:00');
   assert.equal(await page.locator('.list li').count(), 4);
   await page.screenshot({ path: `${SHOTS}/timer.png` });
+  // 쓰는 법: 예시 줄을 실제로 읽은 결과를 보여 준다
+  await page.getByRole('button', { name: '순서표 쓰는 법' }).click();
+  const guide = page.locator('dialog.guide');
+  await guide.waitFor();
+  assert.match(await guide.innerText(), /점심 · 13:30까지/);
+  await page.screenshot({ path: `${SHOTS}/timer-guide.png` });
+  await page.keyboard.press('Escape');
+  await guide.waitFor({ state: 'hidden' });
   // 순서표를 고치면 바로 반영된다
   await sheet.fill('발표 0:03\n질의응답\t0:02\n마무리 1시간 30분');
   assert.equal(await time(), '0:03');
@@ -778,6 +786,19 @@ test('행사 타이머', async () => {
   assert.match(await time(), /^\+0:\d\d$/);
   await page.getByRole('button', { name: '처음 상태로' }).click();
   assert.equal(await time(), '0:03');
+  // 몇 시까지: 지금부터 10분 뒤 시각을 적으면 시작 전에도 9:3x~10:3x 로 줄어든다
+  const soon = await page.evaluate(() => {
+    const d = new Date(Date.now() + 10 * 60_000 + 30_000);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  });
+  await sheet.fill(`대기 ${soon}까지\n발표 15`);
+  assert.deepEqual(await page.locator('.list .du').allInnerTexts(), [`${soon.replace(/^0/, '')}까지`, '15분']);
+  assert.match(await time(), /^(10:[0-3]\d|9:[3-5]\d)$/);
+  const before = await time();
+  await page.waitForTimeout(1200);
+  assert.notEqual(await time(), before);
+  assert.equal(await page.getByRole('button', { name: '시작', exact: true }).count(), 1);
+  await page.getByRole('button', { name: '처음 상태로' }).click();
   await page.setViewportSize({ width: 390, height: 780 });
   await page.waitForTimeout(200);
   await page.screenshot({ path: `${SHOTS}/timer-mobile.png` });

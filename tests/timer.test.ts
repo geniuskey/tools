@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adjust, advance, clockText, durationText, goto, initial, parseAgenda, parseDuration, pause, phaseOf, remaining, retext, schedule, start, type Shared } from '../src/lib/timer/core';
+import { adjust, advance, clockText, durationText, goto, initial, parseAgenda, parseDuration, pause, phaseOf, remaining, retext, schedule, start, targetAt, type Shared } from '../src/lib/timer/core';
 
 test('시간 읽기', () => {
   assert.equal(parseDuration('15'), 900);
@@ -120,4 +120,80 @@ test('표시', () => {
   assert.deepEqual(schedule(s, agenda, 20_000), [null, 120_000, 150_000]);
   // 초과 중이면 다음 순서는 지금부터 센다
   assert.deepEqual(schedule(s, agenda, 200_000), [null, 200_000, 230_000]);
+});
+
+// 시각은 이 컴퓨터의 시간대로 센다
+const at = (h: number, m = 0, day = 13) => new Date(2026, 10, day, h, m).getTime();
+
+test('몇 시까지 읽기', () => {
+  const pick = (t: string) => parseAgenda(t).map((s) => [s.name, s.seconds, s.at ?? null, !!s.flex]);
+  assert.deepEqual(pick('쉬는 시간 14:30까지'), [['쉬는 시간', 0, 870, false]]);
+  assert.deepEqual(pick('점심 ~13:00\n등록 @09:00\n발표 - 15:10 까지'), [
+    ['점심', 0, 780, false],
+    ['등록', 0, 540, false],
+    ['발표', 0, 910, false],
+  ]);
+  assert.deepEqual(pick('쉬는시간~14:30'), [['쉬는시간', 0, 870, false]]);
+  assert.deepEqual(pick('2부 오후 2시 반까지\n뒤풀이 9pm까지\n밤샘 오전 12시까지'), [
+    ['2부', 0, 870, false],
+    ['뒤풀이', 0, 1260, false],
+    ['밤샘', 0, 0, false],
+  ]);
+  // 오전 · 오후를 안 쓰면 둘 다 될 수 있다
+  assert.deepEqual(pick('발표 2시까지\n토론 10:30까지'), [
+    ['발표', 0, 120, true],
+    ['토론', 0, 630, true],
+  ]);
+  // 표시가 없으면 지금처럼 길이 (분:초 · 시간 단위)
+  assert.deepEqual(pick('발표 14:30\n1부 1시간 30분까지'), [
+    ['발표', 870, null, false],
+    ['1부 1시간 30분까지', 300, null, false],
+  ]);
+  assert.deepEqual(pick('이상한 25:00까지'), [['이상한 25:00까지', 300, null, false]]);
+});
+
+test('그 시각이 언제인지', () => {
+  const seg = (t: string) => parseAgenda(t)[0];
+  assert.equal(targetAt(seg('x 14:30까지'), at(13)), at(14, 30));
+  // 조금 지났으면 오늘 (초과로 센다), 한참 지났으면 내일
+  assert.equal(targetAt(seg('x 14:30까지'), at(14, 40)), at(14, 30));
+  assert.equal(targetAt(seg('x 09:00까지'), at(20)), at(9, 0, 14));
+  // 자정을 넘는다
+  assert.equal(targetAt(seg('x 0:30까지'), at(23, 50)), at(0, 30, 14));
+  // 오전 · 오후가 없으면 가까운 쪽
+  assert.equal(targetAt(seg('x 2시까지'), at(13)), at(14));
+  assert.equal(targetAt(seg('x 10시까지'), at(9)), at(10));
+  assert.equal(targetAt(seg('x 10시까지'), at(21)), at(22));
+});
+
+test('시각까지 세는 순서', () => {
+  const text = '대기 10:00까지\n여는 말 0:30\n쉬는 시간 10:20까지\n마무리 5';
+  const ag = parseAgenda(text);
+  // 시작 전에도 시계를 따라 줄어든다
+  let s = initial(text, at(9, 50));
+  assert.deepEqual([s.running, remaining(s, at(9, 50)), remaining(s, at(9, 55))], [false, 600_000, 300_000]);
+  // 언제 시작해도 10:00 에 끝난다
+  s = start(s, at(9, 55));
+  assert.equal(s.endAt, at(10));
+  // 앞이 늦어지면 쉬는 시간이 짧아진다
+  s = { ...s, over: 'next' };
+  s = advance(s, ag, at(10, 0, 13) + 1);
+  assert.deepEqual([s.index, s.anchor, remaining(s, at(10))], [1, 0, 30_000]);
+  assert.deepEqual(schedule(s, ag, at(10, 10)), [null, at(10, 10), at(10, 20), at(10, 25)]);
+  s = advance(s, ag, at(10, 0, 13) + 30_000);
+  assert.deepEqual([s.index, s.anchor, remaining(s, at(10, 15))], [2, at(10, 20), 300_000]);
+  // 멈추면 그 자리에서 얼고, 이어서 하면 남은 시간부터
+  const p = pause(s, at(10, 15));
+  assert.deepEqual([p.anchor, remaining(p, at(10, 18))], [0, 300_000]);
+  // 시간을 조절하면 시각에서 풀린다
+  const a = adjust(s, 60_000, at(10, 15));
+  assert.deepEqual([a.anchor, remaining(a, at(10, 15))], [0, 360_000]);
+  // 다시 하면 시각으로 돌아간다
+  assert.equal(remaining(goto(a, ag, 2, at(10, 16)), at(10, 16)), 240_000);
+  // 이미 지난 시각까지인 순서는 건너뛴다
+  const late = advance({ ...goto(s, ag, 1, at(10, 25)), over: 'next' }, ag, at(10, 26));
+  assert.deepEqual([late.index, remaining(late, at(10, 26))], [3, 270_000]);
+  // 달리는 중에 시각을 고치면 새 시각을 따른다
+  const moved = retext(s, '대기 10:00까지\n여는 말 0:30\n쉬는 시간 10:30까지\n마무리 5', at(10, 15));
+  assert.equal(remaining(moved, at(10, 15)), 900_000);
 });
