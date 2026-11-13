@@ -1,5 +1,16 @@
+export type ToolGroupId = 'work' | 'media' | 'share' | 'event';
+
+/** 업무에 가까운 것부터. 첫 화면과 서랍이 이 순서로 묶어 보여 준다. */
+export const toolGroups: { id: ToolGroupId; name: string }[] = [
+  { id: 'work', name: '문서 · 데이터' },
+  { id: 'media', name: '이미지 · 화면' },
+  { id: 'share', name: '공유' },
+  { id: 'event', name: '행사 · 모임' },
+];
+
 export interface ToolInfo {
   id: string;
+  group: ToolGroupId;
   href: string;
   name: string;
   /** 서랍 목록에 쓰는 한 줄 */
@@ -14,7 +25,44 @@ export interface ToolInfo {
 
 export const tools: ToolInfo[] = [
   {
+    id: 'data',
+    group: 'work',
+    href: '/data',
+    name: '데이터 뷰어',
+    short: 'JSON · YAML · TOML · CSV 변환',
+    icon: 'M5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-13A1.5 1.5 0 0 1 5.5 4zM4 9.5h16M4 14.5h16M9.5 9.5V20',
+    tagline: 'JSON · YAML · TOML · CSV 를 바로 펼쳐 보고, 찾고, 서로 바꿉니다.',
+    color: 'var(--c-data)',
+    features: ['수십만 줄도 끊김 없는 트리 · 표', '키 · 값 검색, 경로 복사', '정렬 · 거르기 · 엑셀용 복사', 'JSON · YAML · TOML · CSV 서로 변환, 오류 위치 표시'],
+    keywords: 'json csv tsv viewer data table tree 데이터 뷰어 표 트리 변환 포맷 정렬 jsonl yaml yml toml 컨버터 convert',
+  },
+  {
+    id: 'diff',
+    group: 'work',
+    href: '/diff',
+    name: '비교',
+    short: '텍스트 · JSON · 이미지 차이',
+    icon: 'M5.5 4h5A1.5 1.5 0 0 1 12 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 4 18.5v-13A1.5 1.5 0 0 1 5.5 4zM15 4h3.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H15M6.5 12h3M16 9.5v5M13.5 12h5',
+    tagline: '두 글, 두 JSON, 두 이미지에서 달라진 곳만 정확히 짚어 줍니다.',
+    color: 'var(--c-diff)',
+    features: ['줄 · 단어 단위 차이 강조', '나란히 / 한 줄로 보기 · 패치 내보내기', 'JSON 키 순서 · 들여쓰기 무시', '이미지 슬라이더 · 픽셀 차이'],
+    keywords: 'diff compare 비교 차이 텍스트 json 이미지 patch merge 변경',
+  },
+  {
+    id: 'text',
+    group: 'work',
+    href: '/text',
+    name: '텍스트',
+    short: '정규식 · 줄 정리 · 글자 수',
+    icon: 'M5 6h14M5 10h9M5 14h14M5 18h6M17.5 16.5l3 3M15 17.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0',
+    tagline: '정규식을 우리말로 풀어 주고, 줄을 정리하고, 글자 수를 셉니다.',
+    color: 'var(--c-text)',
+    features: ['정규식 시험 · 한 조각씩 풀이', '바꾸기 미리보기 · 묶음을 표로 복사', '줄 정렬 · 겹치는 줄 지우기 · 잇기', '글자 수 · 바이트 · 원고지 장수'],
+    keywords: 'text regex regexp 정규식 정규표현식 텍스트 글자 수 세기 바이트 줄 정렬 중복 제거 대소문자 원고지 자소서 치환',
+  },
+  {
     id: 'calculator',
+    group: 'work',
     href: '/calculator',
     name: '계산기',
     short: '수식 · 공학 · 프로그래머',
@@ -26,6 +74,7 @@ export const tools: ToolInfo[] = [
   },
   {
     id: 'image',
+    group: 'media',
     href: '/image',
     name: '이미지 편집기',
     short: '주석 · 모자이크 · 자르기',
@@ -37,6 +86,7 @@ export const tools: ToolInfo[] = [
   },
   {
     id: 'convert',
+    group: 'media',
     href: '/convert',
     name: '이미지 일괄 변환',
     short: '형식 · 크기 · 용량 한꺼번에',
@@ -47,40 +97,8 @@ export const tools: ToolInfo[] = [
     keywords: 'convert resize compress image batch 이미지 사진 변환 일괄 용량 줄이기 압축 리사이즈 webp jpg png heic exif 위치 zip',
   },
   {
-    id: 'raffle',
-    href: '/raffle',
-    name: '추첨기',
-    short: '행사용 경품 추첨',
-    icon: 'M4 8.5A1.5 1.5 0 0 1 5.5 7h13A1.5 1.5 0 0 1 20 8.5V10a2 2 0 0 0 0 4v1.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 15.5V14a2 2 0 0 0 0-4zM14 7v2M14 11.5v1M14 15v2',
-    tagline: '수백 명 명단도 거뜬한 행사용 추첨. 강당 스크린을 위한 전체 화면.',
-    color: 'var(--c-raffle)',
-    features: ['엑셀에서 붙여넣기 · 번호 범위', '경품별 인원 · 중복 당첨 방지', '전체 화면 무대 · 효과음', '암호학적 난수 · 결과 내보내기'],
-    keywords: 'raffle lottery draw 추첨 뽑기 경품 행사 랜덤 제비',
-  },
-  {
-    id: 'team',
-    href: '/team',
-    name: '조 편성 · 사다리',
-    short: '팀 나누기 · 사다리타기',
-    icon: 'M8 11a3 3 0 1 0 0-6a3 3 0 0 0 0 6zM16.5 11a2.5 2.5 0 1 0 0-5a2.5 2.5 0 0 0 0 5zM3 19c0-2.8 2.2-5 5-5s5 2.2 5 5M14.5 14.2c.6-.2 1.3-.2 2-.2 2.5 0 4.5 2 4.5 4.5',
-    tagline: '명단을 붙여 넣으면 조를 고르게 나누고, 사다리도 탑니다. 결과는 공평하게.',
-    color: 'var(--c-team)',
-    features: ['인원은 고르게, 소속 · 성별은 섞어서', '떨어뜨릴 사람 · 같은 조에 넣을 사람', '이름을 누르면 타고 내려가는 사다리', '암호학적 난수 · 복사 · CSV'],
-    keywords: 'team group split ladder 조 편성 팀 나누기 조 짜기 사다리 사다리타기 랜덤 섞기 조장 벌칙',
-  },
-  {
-    id: 'diff',
-    href: '/diff',
-    name: '비교',
-    short: '텍스트 · JSON · 이미지 차이',
-    icon: 'M5.5 4h5A1.5 1.5 0 0 1 12 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-5A1.5 1.5 0 0 1 4 18.5v-13A1.5 1.5 0 0 1 5.5 4zM15 4h3.5A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5H15M6.5 12h3M16 9.5v5M13.5 12h5',
-    tagline: '두 글, 두 JSON, 두 이미지에서 달라진 곳만 정확히 짚어 줍니다.',
-    color: 'var(--c-diff)',
-    features: ['줄 · 단어 단위 차이 강조', '나란히 / 한 줄로 보기 · 패치 내보내기', 'JSON 키 순서 · 들여쓰기 무시', '이미지 슬라이더 · 픽셀 차이'],
-    keywords: 'diff compare 비교 차이 텍스트 json 이미지 patch merge 변경',
-  },
-  {
     id: 'recorder',
+    group: 'media',
     href: '/recorder',
     name: '화면 녹화',
     short: '녹화 · 구간/영역 자르기 · GIF',
@@ -91,29 +109,8 @@ export const tools: ToolInfo[] = [
     keywords: 'screen record recorder gif video 화면 녹화 캡처 영상 움짤 변환 webm mp4',
   },
   {
-    id: 'data',
-    href: '/data',
-    name: '데이터 뷰어',
-    short: 'JSON · YAML · TOML · CSV 변환',
-    icon: 'M5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5v-13A1.5 1.5 0 0 1 5.5 4zM4 9.5h16M4 14.5h16M9.5 9.5V20',
-    tagline: 'JSON · YAML · TOML · CSV 를 바로 펼쳐 보고, 찾고, 서로 바꿉니다.',
-    color: 'var(--c-data)',
-    features: ['수십만 줄도 끊김 없는 트리 · 표', '키 · 값 검색, 경로 복사', '정렬 · 거르기 · 엑셀용 복사', 'JSON · YAML · TOML · CSV 서로 변환, 오류 위치 표시'],
-    keywords: 'json csv tsv viewer data table tree 데이터 뷰어 표 트리 변환 포맷 정렬 jsonl yaml yml toml 컨버터 convert',
-  },
-  {
-    id: 'text',
-    href: '/text',
-    name: '텍스트',
-    short: '정규식 · 줄 정리 · 글자 수',
-    icon: 'M5 6h14M5 10h9M5 14h14M5 18h6M17.5 16.5l3 3M15 17.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0',
-    tagline: '정규식을 우리말로 풀어 주고, 줄을 정리하고, 글자 수를 셉니다.',
-    color: 'var(--c-text)',
-    features: ['정규식 시험 · 한 조각씩 풀이', '바꾸기 미리보기 · 묶음을 표로 복사', '줄 정렬 · 겹치는 줄 지우기 · 잇기', '글자 수 · 바이트 · 원고지 장수'],
-    keywords: 'text regex regexp 정규식 정규표현식 텍스트 글자 수 세기 바이트 줄 정렬 중복 제거 대소문자 원고지 자소서 치환',
-  },
-  {
     id: 'qr',
+    group: 'share',
     href: '/qr',
     name: 'QR 코드',
     short: '링크 · Wi-Fi · 연락처 · 로고',
@@ -125,6 +122,7 @@ export const tools: ToolInfo[] = [
   },
   {
     id: 'timer',
+    group: 'event',
     href: '/timer',
     name: '행사 타이머',
     short: '순서표 · 발표자 화면 · 메시지',
@@ -134,7 +132,34 @@ export const tools: ToolInfo[] = [
     features: ['순서표 붙여넣기 · 끝나는 시각 예상', '발표자 화면을 다른 창으로 (동기화)', '화면에 크게 띄우는 메시지', '경고 색 · 소리 · 초과 시간'],
     keywords: 'timer countdown stopwatch 타이머 카운트다운 발표 행사 시간 스톱워치 진행',
   },
+  {
+    id: 'team',
+    group: 'event',
+    href: '/team',
+    name: '조 편성 · 사다리',
+    short: '팀 나누기 · 사다리타기',
+    icon: 'M8 11a3 3 0 1 0 0-6a3 3 0 0 0 0 6zM16.5 11a2.5 2.5 0 1 0 0-5a2.5 2.5 0 0 0 0 5zM3 19c0-2.8 2.2-5 5-5s5 2.2 5 5M14.5 14.2c.6-.2 1.3-.2 2-.2 2.5 0 4.5 2 4.5 4.5',
+    tagline: '명단을 붙여 넣으면 조를 고르게 나누고, 사다리도 탑니다. 결과는 공평하게.',
+    color: 'var(--c-team)',
+    features: ['인원은 고르게, 소속 · 성별은 섞어서', '떨어뜨릴 사람 · 같은 조에 넣을 사람', '이름을 누르면 타고 내려가는 사다리', '암호학적 난수 · 복사 · CSV'],
+    keywords: 'team group split ladder 조 편성 팀 나누기 조 짜기 사다리 사다리타기 랜덤 섞기 조장 벌칙',
+  },
+  {
+    id: 'raffle',
+    group: 'event',
+    href: '/raffle',
+    name: '추첨기',
+    short: '행사용 경품 추첨',
+    icon: 'M4 8.5A1.5 1.5 0 0 1 5.5 7h13A1.5 1.5 0 0 1 20 8.5V10a2 2 0 0 0 0 4v1.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 15.5V14a2 2 0 0 0 0-4zM14 7v2M14 11.5v1M14 15v2',
+    tagline: '수백 명 명단도 거뜬한 행사용 추첨. 강당 스크린을 위한 전체 화면.',
+    color: 'var(--c-raffle)',
+    features: ['엑셀에서 붙여넣기 · 번호 범위', '경품별 인원 · 중복 당첨 방지', '전체 화면 무대 · 효과음', '암호학적 난수 · 결과 내보내기'],
+    keywords: 'raffle lottery draw 추첨 뽑기 경품 행사 랜덤 제비',
+  },
 ];
+
+/** 분류별로 묶은 도구. 배열 안 순서를 그대로 지킨다. */
+export const groupedTools = toolGroups.map((g) => ({ ...g, tools: tools.filter((t) => t.group === g.id) }));
 
 export function toolById(id: string): ToolInfo {
   const t = tools.find((x) => x.id === id);

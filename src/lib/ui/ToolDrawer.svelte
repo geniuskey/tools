@@ -1,7 +1,7 @@
 <script lang="ts">
   import { afterNavigate } from '$app/navigation';
   import { page } from '$app/state';
-  import { tools } from '$lib/tools';
+  import { groupedTools } from '$lib/tools';
   import Logo from './Logo.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
 
@@ -62,8 +62,9 @@
         <span class="text"><b>모든 도구</b><small>첫 화면</small></span>
       </a>
 
-      <h2>도구</h2>
-      {#each tools as t (t.id)}
+      {#each groupedTools as g (g.id)}
+      <h2>{g.name}</h2>
+      {#each g.tools as t (t.id)}
         <a class="item app-scope" href={t.href} style:--app={t.color} aria-current={path === t.href ? 'page' : undefined} onclick={close}>
           <span class="tile">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -72,6 +73,7 @@
           </span>
           <span class="text"><b>{t.name}</b><small>{t.short}</small></span>
         </a>
+      {/each}
       {/each}
     </nav>
 

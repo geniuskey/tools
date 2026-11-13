@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tools } from '$lib/tools';
+  import { groupedTools } from '$lib/tools';
   import { encodeQr } from '$lib/qr/core';
   import { renderSvg, defaultStyle } from '$lib/qr/render';
 
@@ -11,7 +11,7 @@
 
 <svelte:head>
   <title>tools.euiyun.com — 제대로 만든 웹 도구</title>
-  <meta name="description" content="계산기, 이미지 편집기, 이미지 일괄 변환, 추첨기, 조 편성 · 사다리, 비교, 화면 녹화, 데이터 뷰어, 텍스트(정규식 · 글자 수), QR 코드, 행사 타이머. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
+  <meta name="description" content="데이터 뷰어, 비교, 텍스트(정규식 · 글자 수), 계산기, 이미지 편집기, 이미지 일괄 변환, 화면 녹화, QR 코드, 행사 타이머, 조 편성 · 사다리, 추첨기. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
 </svelte:head>
 
 <div class="wrap">
@@ -35,8 +35,11 @@
     </p>
   </section>
 
-  <section class="grid" aria-label="도구 목록">
-    {#each tools as t (t.id)}
+  {#each groupedTools as g (g.id)}
+  <section class="group" aria-labelledby="group-{g.id}">
+    <h2 class="group-title" id="group-{g.id}">{g.name}</h2>
+    <div class="grid">
+    {#each g.tools as t (t.id)}
       <a class="card app-scope" href={t.href} style:--app={t.color}>
         <div class="preview" aria-hidden="true">
           {#if t.id === 'calculator'}
@@ -150,7 +153,7 @@
           {/if}
         </div>
         <div class="body">
-          <h2>{t.name}<span class="go" aria-hidden="true">→</span></h2>
+          <h3>{t.name}<span class="go" aria-hidden="true">→</span></h3>
           <p>{t.tagline}</p>
           <ul>
             {#each t.features as f (f)}<li>{f}</li>{/each}
@@ -158,7 +161,9 @@
         </div>
       </a>
     {/each}
+    </div>
   </section>
+  {/each}
 
   <section class="principles" aria-label="원칙">
     <div>
@@ -253,9 +258,29 @@
     color: var(--muted);
   }
 
+  .group + .group {
+    margin-top: 40px;
+  }
+  .group-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 14px;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+  }
+  .group-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+    /* auto-fill: 한 장뿐인 분류도 카드 폭을 그대로 지킨다 */
+    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
     gap: 18px;
   }
   .card {
@@ -283,7 +308,7 @@
   .body {
     padding: 18px 20px 20px;
   }
-  .body h2 {
+  .body h3 {
     display: flex;
     align-items: center;
     justify-content: space-between;
