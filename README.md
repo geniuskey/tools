@@ -6,8 +6,11 @@
 | 도구 | 경로 | 핵심 |
 | --- | --- | --- |
 | 계산기 | `/calculator` | 직접 만든 수식 파서 + 임의 정밀도 10진 연산, 공학 · 프로그래머 모드, 기록 · 메모리 |
+| 날짜 계산기 | `/date` | 두 날짜 사이 · 며칠 뒤를 근무일로, 공휴일 · 대체공휴일을 규정대로 계산, 음력 명절은 표 없이 달과 해의 위치를 계산해서(Meeus), 연차 붙이기 좋은 날, 시간대가 다른 곳과 겹치는 근무 시간, 음력 ↔ 양력, 공휴일 달력 파일(.ics) |
+| 인코딩 · 해시 | `/encode` | 붙여넣은 글이 무엇인지 알아서 판단(JWT · Base64 · URL · 16진수 · 유닉스 시각 · UUID …)하고 그럴듯한 순서로 풀기, 겹겹이 싸인 것은 이어서 풀기, JWT 만료 · HS 서명 확인, 직접 만든 MD5 · CRC32 · Punycode, 파일 해시(조각내어 읽기) · HMAC · 체크섬 비교, UUID v4/v7 · ULID · 토큰 · 비밀번호 |
 | 이미지 편집기 | `/image` | 벡터 주석(화살표 · 도형 · 글자 · 번호), 모자이크 · 블러, 자르기 · 크기 · 회전 · 보정, 배경 꾸미기 |
 | 이미지 일괄 변환 | `/convert` | 여러 장을 한꺼번에 JPG · PNG · WebP 로, 긴 쪽 · 비율로 크기 줄이기, 목표 용량에 맞는 품질 이분 탐색, EXIF(위치 · 기기) 읽어서 알려 주고 지우기, 앞뒤 비교, 직접 만든 ZIP 쓰기 |
+| 이름표 · 좌석표 | `/badge` | A4 라벨 규격 · 접는 명패에 맞춰 인쇄(mm 그대로), 이름 길이에 맞춰 글자 크기를 알아서, 사람마다 QR, 테이블 · 줄 자리 배치(소속 섞기 · 떨어뜨릴 사람), 자리 맞바꾸기, 이름으로 찾는 표 |
 | 추첨기 | `/raffle` | 엑셀 붙여넣기, 경품별 인원, 암호학적 난수, 전체 화면 무대(막 · 조명 · 이름 릴 · 색종이), 결과 내보내기 |
 | 조 편성 · 사다리 | `/team` | 인원은 고르게 · 부가 정보(소속 · 성별)는 섞어서 · 떨어뜨릴 사람 / 묶을 사람 조건, 조장 뽑기, 결과를 먼저 공평하게 뽑고 그 결과가 나오게 그리는 사다리 |
 | 비교 | `/diff` | 직접 만든 diff 엔진(Myers + patience), 좌우 두 창이 그대로 편집기(CodeMirror) — 고치는 대로 다시 비교 · 줄 맞춤 빈칸 · 블록 복사 · 찾기 · 되돌리기, 줄 · 단어 단위 강조, 패치 내보내기, JSON 정규화, 이미지 슬라이더 · 픽셀 차이 |
@@ -15,10 +18,13 @@
 | 데이터 뷰어 | `/data` | JSON 트리 · CSV 표(보이는 줄만 그려 100만 행도 바로), 검색 · 경로 복사, 정렬 · 거르기, JSON · YAML · TOML · CSV 를 알아서 읽고 서로 변환 |
 | 텍스트 | `/text` | 정규식 시험(작업자에서 돌려 끝나지 않는 식은 끊음) · 한 조각씩 우리말 풀이 · 바꾸기 · 묶음을 표로 복사, 줄 정렬 · 겹치는 줄 지우기 · 잇기, 글자 수 · 바이트 · 원고지 |
 | QR 코드 | `/qr` | 직접 만든 QR 인코더(버전 1~40), Wi-Fi · 연락처 양식, 모양 · 색 · 로고, 브라우저 인식기로 읽기 확인 |
-| 행사 타이머 | `/timer` | 순서표, 발표자 화면을 다른 창으로(BroadcastChannel 동기화), 화면 메시지, 경고 색 · 소리 |
+| 행사 타이머 | `/timer` | 순서표(길이 또는 "몇 시까지"), 발표자 화면을 다른 창으로(BroadcastChannel 동기화), 화면 메시지, 경고 색 · 소리, 무대 배경(물 · 모래 · 별 · 오로라), 순서표 · 설정을 주소에 담아 링크로 공유 |
 
 모든 도구는 브라우저 안에서만 동작한다. 서버로 보내는 코드가 없고 CSP(`connect-src 'self'`)로도 막는다.
 서비스 워커가 빌드 산출물을 캐시하므로 한 번 열면 오프라인에서도 쓸 수 있다.
+
+도구끼리는 결과를 넘길 수 있다: 화면 녹화의 한 장면 → 이미지 편집기, 이미지 편집기 → 일괄 변환, 데이터 뷰어의 두 부분 → 비교.
+받는 도구가 새 탭으로 열리므로 하던 작업은 그대로 남는다 (`src/lib/handoff.ts`, 같은 브라우저의 탭끼리만 오가는 BroadcastChannel).
 
 ## 개발
 
@@ -26,9 +32,9 @@
 npm install
 npm run dev        # 개발 서버
 npm run check      # 타입 검사
-npm test           # 단위 테스트 (계산 · 추첨 · 릴 · diff · GIF · CSV/JSON · QR · 타이머 · 이미지 변환 · 조 편성/사다리 · 정규식/줄 정리)
+npm test           # 단위 테스트 (계산 · 추첨 · 릴 · diff · GIF · CSV/JSON · QR · 타이머 · 이미지 변환 · 조 편성/사다리 · 정규식/줄 정리 · 날짜/음력/공휴일/시간대 · 이름표/좌석 · 인코딩/해시)
 npm run build && npx vite preview --port 4317 &
-npm run e2e        # 실제 브라우저(설치된 Chrome)로 핵심 흐름 확인, 스크린샷은 e2e/screenshots
+npm run e2e        # 실제 브라우저(설치된 Chrome)로 핵심 흐름 확인 (smoke · badge · encode), 스크린샷은 e2e/screenshots
 npm run deploy     # Cloudflare Pages (프로젝트 이름: tools)
 ```
 
@@ -48,6 +54,10 @@ npm run deploy     # Cloudflare Pages (프로젝트 이름: tools)
 - `src/lib/convert/` — 크기 계산 · 목표 용량 탐색 · EXIF 읽기 · ZIP 쓰기(`core.ts`), 캔버스로 읽고 다시 담기(`pipeline.ts`).
 - `src/lib/team/core.ts` — 조 편성(무작위로 나눈 뒤 맞바꾸며 다듬기), 사다리(뽑은 결과 → 가로대), 길 따라가기. 명단 파서와 난수는 `raffle/core.ts` 것을 쓴다.
 - `src/lib/text/` — 정규식 실행 · 풀이 · 오류 번역(`regex.ts`), 작업자와 시간 제한(`match.worker.ts`, `runner.ts`), 줄 정리 · 글자 수(`lines.ts`).
+- `src/lib/date/` — 날 수로 다루는 날짜(`core.ts`), 음력(`lunar.ts`: 합삭 · 중기 계산, 윤달), 공휴일과 대체공휴일(`holidays.ts`), 근무일 · 연휴 · 달력 파일(`work.ts`), 시간대와 겹치는 시간(`zones.ts`), 탭이 같이 쓰는 상태(`state.svelte.ts`). 선거일 · 임시공휴일은 `holidays.ts` 의 `ONE_OFF` 에 손으로 적는다.
+- `src/lib/encode/` — 무엇인지 알아보기(`detect.ts`), 풀기 · 만들기(`codec.ts`, `punycode.ts`), 해시(`hash.ts`), JWT(`jwt.ts`), UUID · ULID · 토큰(`ids.ts`), 시각(`time.ts`).
+- `src/lib/badge/` — 용지 · 칸 계산, 글자 맞춤, 자리 배치(`core.ts`), 이름표 한 장(`Face.svelte`).
+- `src/lib/handoff.ts` — 도구 사이에 결과 넘기기 (새 탭 + BroadcastChannel).
 - `src/lib/timer/` — 타이머 계산(`core.ts`), 창 사이 동기화(`store.svelte.ts`), 무대(`Stage.svelte`).
 
 SvelteKit + adapter-static 으로 정적 사이트를 만든다 (office 와 같은 구성).

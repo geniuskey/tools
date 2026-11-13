@@ -11,7 +11,7 @@
 
 <svelte:head>
   <title>tools.euiyun.com — 제대로 만든 웹 도구</title>
-  <meta name="description" content="데이터 뷰어, 비교, 텍스트(정규식 · 글자 수), 계산기, 이미지 편집기, 이미지 일괄 변환, 화면 녹화, QR 코드, 행사 타이머, 조 편성 · 사다리, 추첨기. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
+  <meta name="description" content="데이터 뷰어, 비교, 텍스트(정규식 · 글자 수), 계산기, 날짜 계산기(근무일 · 공휴일), 인코딩 · 해시, 이미지 편집기, 이미지 일괄 변환, 화면 녹화, QR 코드, 행사 타이머, 조 편성 · 사다리, 이름표 · 좌석표, 추첨기. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
 </svelte:head>
 
 <div class="wrap">
@@ -140,6 +140,47 @@
               <code class="pv-re"><i>/</i>01\d-<b>(\d{'{'}4{'}'})</b>-\d{'{'}4{'}'}<i>/g</i></code>
               <p>김하늘 <mark>010-1234-5678</mark><br />이서연 <mark>011-9876-5432</mark><br />박민준 02-123-4567</p>
               <span><b>\d{'{'}4{'}'}</b> 숫자 하나 — 정확히 4번</span>
+            </div>
+          {:else if t.id === 'date'}
+            <div class="pv-date">
+              <span class="pv-q">11월 13일에서 근무일 <b>10일</b> 뒤</span>
+              <strong>11월 27일 <small>(금)</small></strong>
+              <div class="pv-days">
+                {#each Array(15) as _, i (i)}
+                  <i class:off={[1, 2, 8, 9].includes(i)} class:from={i === 0} class:hit={i === 14}>{13 + i}</i>
+                {/each}
+              </div>
+              <span class="pv-skip">주말 4일을 건너뛰었습니다</span>
+            </div>
+          {:else if t.id === 'encode'}
+            <div class="pv-encode">
+              <code class="pv-in">eyJhbGciOiJIUzI1NiJ9<i>.</i>eyJzdWIiOiLtmY0<i>.</i>SflKxw…</code>
+              <div class="pv-card">
+                <p><b>JWT</b><em>거의 확실</em></p>
+                <dl>
+                  <div><dt>만료 exp</dt><dd>11-13 20:45 KST <span>3시간 12분 뒤</span></dd></div>
+                  <div><dt>sub</dt><dd>홍길동</dd></div>
+                </dl>
+              </div>
+            </div>
+          {:else if t.id === 'badge'}
+            <div class="pv-badge">
+              <div class="pv-tag">
+                <b>2026 환영회</b>
+                <strong>김 솔</strong>
+                <span>개발팀</span>
+              </div>
+              <div class="pv-tag">
+                <b>2026 환영회</b>
+                <strong class="long">제갈공명선생님</strong>
+                <span>디자인팀 · 팀장</span>
+              </div>
+              <div class="pv-seats">
+                <i></i>
+                {#each ['하늘', '서연', '민준', '지우', '도윤', '수아'] as n, k (n)}
+                  <em style:--a="{k * 60 - 90}deg">{n}</em>
+                {/each}
+              </div>
             </div>
           {:else if t.id === 'raffle'}
             <div class="pv-raffle">
@@ -614,6 +655,210 @@
     padding: 3px 0;
     background: var(--app);
     color: var(--on-app);
+  }
+
+  /* 미리보기: 날짜 계산기 */
+  .pv-date {
+    position: absolute;
+    inset: 18px 24px auto;
+    display: grid;
+    justify-items: start;
+    gap: 5px;
+  }
+  .pv-q {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .pv-q b {
+    color: var(--text);
+  }
+  .pv-date strong {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    line-height: 1.1;
+    color: var(--app);
+  }
+  .pv-date small {
+    font-size: 17px;
+  }
+  .pv-days {
+    display: grid;
+    grid-template-columns: repeat(15, minmax(0, 1fr));
+    gap: 2px;
+    width: 100%;
+    margin-top: 4px;
+  }
+  .pv-days i {
+    padding: 4px 0;
+    border-radius: 5px;
+    background: var(--surface);
+    font-style: normal;
+    font-size: 9.5px;
+    font-weight: 600;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .pv-days .off {
+    background: transparent;
+    color: var(--bad);
+    opacity: 0.7;
+  }
+  .pv-days .from {
+    box-shadow: inset 0 0 0 1.5px var(--app);
+  }
+  .pv-days .hit {
+    background: var(--app);
+    color: var(--on-app);
+  }
+  .pv-skip {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* 미리보기: 인코딩 · 해시 */
+  .pv-encode {
+    position: absolute;
+    inset: 16px 26px auto;
+    display: grid;
+    gap: 7px;
+    font-size: 12px;
+  }
+  .pv-in {
+    padding: 6px 10px;
+    border-radius: 9px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pv-in i {
+    font-style: normal;
+    font-weight: 700;
+    color: var(--app);
+  }
+  .pv-card {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--app-line);
+    box-shadow: inset 3px 0 0 var(--app), var(--shadow);
+  }
+  .pv-card p {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+  }
+  .pv-card em {
+    padding: 0 7px;
+    border-radius: 99px;
+    background: var(--app-soft);
+    font-style: normal;
+    font-size: 10.5px;
+    font-weight: 650;
+  }
+  .pv-card dl {
+    display: grid;
+    gap: 2px;
+    margin: 5px 0 0;
+    font-size: 11px;
+  }
+  .pv-card dl div {
+    display: grid;
+    grid-template-columns: 58px 1fr;
+    gap: 6px;
+  }
+  .pv-card dt {
+    color: var(--muted);
+  }
+  .pv-card dd {
+    margin: 0;
+    font-family: var(--mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .pv-card dd span {
+    font-family: var(--font);
+    font-weight: 650;
+    color: var(--ok);
+  }
+
+  /* 미리보기: 이름표 · 좌석표 */
+  .pv-badge {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: 84px 84px 100px;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+  }
+  .pv-tag {
+    display: grid;
+    justify-items: center;
+    align-content: start;
+    height: 66px;
+    border-radius: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .pv-tag b {
+    width: 100%;
+    padding: 2px 0;
+    background: var(--app);
+    color: var(--on-app);
+    font-size: 9px;
+    text-align: center;
+  }
+  .pv-tag strong {
+    margin-top: 3px;
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.25;
+  }
+  .pv-tag strong.long {
+    font-size: 11px;
+    line-height: 2.5;
+  }
+  .pv-tag span {
+    font-size: 9.5px;
+    color: var(--muted);
+  }
+  .pv-seats {
+    position: relative;
+    width: 100px;
+    height: 108px;
+  }
+  .pv-seats i {
+    position: absolute;
+    inset: 32px 28px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 1.5px solid var(--app);
+  }
+  .pv-seats em {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 30px;
+    margin: -8px 0 0 -15px;
+    border-radius: 5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-style: normal;
+    font-size: 9.5px;
+    line-height: 15px;
+    text-align: center;
+    transform: rotate(var(--a)) translate(38px) rotate(calc(-1 * var(--a)));
   }
 
   /* 미리보기: 텍스트 */
