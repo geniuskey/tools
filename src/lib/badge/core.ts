@@ -337,7 +337,7 @@ export function fillTemplate(tpl: string, p: { name: string; info: string; no: n
 
 // ── 좌석 ──────────────────────────────────────────────────────────────────
 
-export type Shape = 'round' | 'long' | 'rows';
+export type Shape = 'round' | 'long' | 'pod' | 'rows';
 export type Method = 'order' | 'random' | 'mix' | 'group';
 
 export interface Seat {
@@ -345,11 +345,36 @@ export interface Seat {
   info: string;
   key: string;
 }
+/** 앉지 못하는 자리: closed 는 그대로 보이되 비워 두고, gone 은 치워서 배치도에 그리지 않는다 */
+export type SeatOff = 'closed' | 'gone';
 export interface SeatTable {
   name: string;
   /** 자리 수만큼. 빈 자리는 null */
   seats: (Seat | null)[];
+  /** 격자(열 · 행)에서 몇 번째 칸인가. 치운 테이블이 있으면 번호가 건너뛴다. 없으면 배열 순서 */
+  slot?: number;
+  /** 자리마다 앉지 못하는지 */
+  off?: (SeatOff | null)[];
 }
+
+/**
+ * 손으로 막거나 치운 것. 열쇠는 격자 칸 번호(slot) — "3" 은 그 테이블을 치움, "3:2" 는 그 테이블 3번째 자리.
+ * 테이블 수만 바뀌면 그대로 쓰고, 모양 · 열 · 자리 수가 바뀌면 비운다.
+ */
+export type Offs = Record<string, SeatOff | 'removed'>;
+export const offKey = (slot: number, seat?: number) => (seat == null ? `${slot}` : `${slot}:${seat}`);
+export const slotOf = (t: SeatTable, i: number) => t.slot ?? i;
+
+/** 격자 칸 count 개 가운데 남은 칸과 칸마다 막힌 자리 */
+export function openSlots(offs: Offs, count: number, seats: number): { slots: number[]; off: (SeatOff | null)[][] } {
+  const slots = Array.from({ length: count }, (_, i) => i).filter((i) => offs[offKey(i)] !== 'removed');
+  const off = slots.map((slot) => Array.from({ length: seats }, (_, s) => {
+    const v = offs[offKey(slot, s)];
+    return v === 'closed' || v === 'gone' ? v : null;
+  }));
+  return { slots, off };
+}
+export const openCount = (off: readonly (SeatOff | null)[][]) => off.reduce((n, o) => n + o.filter((x) => !x).length, 0);
 
 /** 이 인원이 앉으려면 테이블(줄)이 몇 개 있어야 하는가 */
 export const suggestTables = (people: number, seats: number) => Math.max(1, Math.ceil(people / Math.max(1, Math.floor(seats) || 1)));
@@ -360,6 +385,8 @@ export interface SeatOptions {
   /** 테이블마다 자리 수 (줄 맞춤이면 한 줄의 자리 수) */
   seats: number;
   method: Method;
+  /** 테이블마다 앉을 수 있는 자리 수 (막은 자리를 뺀). 없으면 모두 seats */
+  caps?: number[];
   /** 앞에서부터 꽉 채운다 (줄 맞춤). 아니면 테이블마다 고르게 */
   front?: boolean;
   apart?: number[][];
@@ -380,16 +407,38 @@ export interface SeatResult {
 export function tableSizes(people: number, tables: number, seats: number, front = false): number[] {
   const k = Math.max(1, Math.floor(tables) || 1);
   const s = Math.max(1, Math.floor(seats) || 1);
-  const n = Math.min(people, k * s);
-  if (front) return Array.from({ length: k }, (_, i) => clamp(n - i * s, 0, s));
-  const even = n ? teamSizes(n, k) : [];
-  return Array.from({ length: k }, (_, i) => even[i] ?? 0);
+  return fillSizes(people, Array(k).fill(s), front);
+}
+
+/**
+ * 테이블마다 앉을 수 있는 자리(caps)가 다를 때 몇 명씩 앉는가.
+ * front 면 앞 테이블부터 꽉 채우고, 아니면 자리가 남는 테이블끼리 인원 차이가 많아야 1명이 되게.
+ */
+export function fillSizes(people: number, caps: readonly number[], front = false): number[] {
+  const c = caps.map((x) => Math.max(0, Math.floor(x) || 0));
+  let n = Math.min(Math.max(0, people), c.reduce((a, b) => a + b, 0));
+  const out = c.map(() => 0);
+  if (front) {
+    c.forEach((cap, i) => {
+      out[i] = Math.min(cap, n);
+      n -= out[i];
+    });
+    return out;
+  }
+  // 물 채우듯: 가장 적게 앉은 (자리가 남은) 테이블에 한 명씩
+  for (; n > 0; n--) {
+    let best = -1;
+    for (let i = 0; i < c.length; i++) if (out[i] < c[i] && (best < 0 || out[i] < out[best])) best = i;
+    out[best]++;
+  }
+  return out;
 }
 
 export function assignSeats(people: readonly Participant[], o: SeatOptions): SeatResult {
   const k = Math.max(1, Math.floor(o.tables) || 1);
   const seats = Math.max(1, Math.floor(o.seats) || 1);
-  const cap = k * seats;
+  const caps = Array.from({ length: k }, (_, i) => clamp(Math.floor(o.caps?.[i] ?? seats), 0, seats));
+  const cap = caps.reduce((a, b) => a + b, 0);
   const all = people.map((_, i) => i);
   const pad = (t: number[][]) => Array.from({ length: k }, (_, i) => t[i] ?? []);
 
@@ -400,9 +449,16 @@ export function assignSeats(people: readonly Participant[], o: SeatOptions): Sea
     const left = order.slice(cap).sort((a, b) => a - b);
     const at = new Map(seated.map((p, i) => [p, i]));
     const groups = (gs?: number[][]) => (gs ?? []).map((g) => g.filter((i) => at.has(i)).map((i) => at.get(i)!)).filter((g) => g.length >= 2);
-    // 줄 맞춤은 쓰는 줄만 고르게 나눈다
-    const used = o.front ? Math.min(k, suggestTables(seated.length, seats)) : k;
-    const r = splitTeams(seated.map((i) => people[i]), { teams: used, balance: o.method === 'mix', apart: groups(o.apart), together: groups(o.together), rand: o.rand });
+    // 줄 맞춤은 앞에서부터 다 앉을 만큼의 줄만 쓰고, 그 줄끼리 고르게 나눈다
+    let used = k;
+    if (o.front) for (let i = 0, sum = 0; i < k; i++) if ((sum += caps[i]) >= seated.length) {
+      used = i + 1;
+      break;
+    }
+    const sizes = fillSizes(seated.length, caps.slice(0, used));
+    const r = seated.length
+      ? splitTeams(seated.map((i) => people[i]), { teams: used, sizes, balance: o.method === 'mix', apart: groups(o.apart), together: groups(o.together), rand: o.rand })
+      : { teams: [], unmet: [] };
     return { tables: pad(r.teams.map((t) => t.map((i) => seated[i]))), unmet: r.unmet.map(([a, b]) => [seated[a], seated[b]]), left };
   }
 
@@ -416,32 +472,91 @@ export function assignSeats(people: readonly Participant[], o: SeatOptions): Sea
     }
     order = [...by].sort((a, b) => Number(a[0] === '') - Number(b[0] === '') || b[1].length - a[1].length).flatMap(([, g]) => g);
   }
-  const sizes = tableSizes(order.length, k, seats, o.front);
+  const sizes = fillSizes(order.length, caps, o.front);
   const tables: number[][] = [];
   let at = 0;
   for (const size of sizes) tables.push(order.slice(at, (at += size)));
   return { tables, unmet: [], left: order.slice(at) };
 }
 
-export const tableName = (i: number, shape: Shape) => (shape === 'rows' ? `${i + 1}줄` : `${i + 1}번 테이블`);
+export const tableName = (i: number, shape: Shape) => (shape === 'rows' ? `${i + 1}줄` : shape === 'pod' ? `${i + 1}모둠` : `${i + 1}번 테이블`);
 
-/** 뽑은 결과를 화면에 그릴 모양으로. 이름을 바꿔 둔 테이블은 그 이름을 쓴다. */
-export function toTables(r: SeatResult, people: readonly Participant[], seats: number, shape: Shape, names: readonly string[] = []): SeatTable[] {
+/**
+ * 뽑은 결과를 화면에 그릴 모양으로. 이름을 바꿔 둔 테이블은 그 이름을 쓴다.
+ * grid 를 주면 테이블마다 격자 칸과 막은 자리를 붙이고, 사람은 막지 않은 자리에만 앉힌다.
+ */
+export function toTables(
+  r: SeatResult, people: readonly Participant[], seats: number, shape: Shape, names: readonly string[] = [],
+  grid?: { slots: readonly number[]; off: readonly (SeatOff | null)[][] },
+): SeatTable[] {
   return r.tables.map((idx, i) => {
-    const list: (Seat | null)[] = idx.map((j) => ({ name: people[j].name, info: people[j].info, key: people[j].key }));
-    while (list.length < seats) list.push(null);
-    return { name: names[i]?.trim() || tableName(i, shape), seats: list };
+    const off = grid?.off[i] ?? [];
+    const list: (Seat | null)[] = Array(seats).fill(null);
+    let s = 0;
+    for (const j of idx) {
+      while (s < seats && off[s]) s++;
+      if (s >= seats) break;
+      list[s++] = { name: people[j].name, info: people[j].info, key: people[j].key };
+    }
+    const t: SeatTable = { name: names[i]?.trim() || tableName(i, shape), seats: list };
+    if (grid) (t.slot = grid.slots[i]), (t.off = Array.from({ length: seats }, (_, k) => off[k] ?? null));
+    return t;
   });
+}
+
+/**
+ * 막거나 치운 것을 지금 배치에 반영한다. 다시 섞지 않고, 막힌 자리에 앉아 있던 사람만 빈 자리로 옮긴다
+ * (같은 테이블 → 사람이 가장 적은 테이블 순으로). waiting(자리가 없던 사람)도 빈 자리가 생기면 앉힌다. 자리가 없으면 left 로.
+ * 기본 이름(1번 테이블 …)은 남은 테이블 순서대로 다시 매긴다.
+ */
+export function reshape(
+  tables: readonly SeatTable[], offs: Offs, count: number, seats: number, shape: Shape, waiting: readonly Seat[] = [],
+): { tables: SeatTable[]; left: Seat[] } {
+  const { slots, off } = openSlots(offs, count, seats);
+  const bySlot = new Map(tables.map((t, i) => [slotOf(t, i), { t, i }]));
+  const left: Seat[] = [];
+  const homeOf = new Map<Seat, number>();
+  for (const [slot, { t }] of bySlot) if (!slots.includes(slot)) for (const s of t.seats) s && left.push(s);
+  const out: SeatTable[] = slots.map((slot, ni) => {
+    const old = bySlot.get(slot);
+    const list: (Seat | null)[] = Array.from({ length: seats }, (_, s) => old?.t.seats[s] ?? null);
+    off[ni].forEach((o, s) => {
+      if (o && list[s]) {
+        homeOf.set(list[s]!, ni);
+        left.push(list[s]!);
+        list[s] = null;
+      }
+    });
+    const renamed = old && old.t.name !== tableName(old.i, shape);
+    return { name: renamed ? old.t.name : tableName(ni, shape), seats: list, slot, off: off[ni].slice() };
+  });
+  left.push(...waiting);
+  const free = (t: SeatTable) => t.seats.findIndex((s, k) => !s && !t.off?.[k]);
+  const rest: Seat[] = [];
+  for (const p of left) {
+    const home = homeOf.get(p);
+    let ti = home != null && free(out[home]) >= 0 ? home : -1;
+    if (ti < 0) {
+      let best = Infinity;
+      out.forEach((t, i) => {
+        const n = t.seats.filter(Boolean).length;
+        if (free(t) >= 0 && n < best) (best = n), (ti = i);
+      });
+    }
+    if (ti < 0) rest.push(p);
+    else out[ti].seats[free(out[ti])] = p;
+  }
+  return { tables: out, left: rest };
 }
 
 export type SeatRef = [table: number, seat: number];
 
-/** 두 자리를 맞바꾼다 (한쪽이 빈 자리면 옮기는 것) */
+/** 두 자리를 맞바꾼다 (한쪽이 빈 자리면 옮기는 것). 막은 자리로는 옮기지 않는다 */
 export function swapSeats(tables: readonly SeatTable[], a: SeatRef, b: SeatRef): SeatTable[] {
-  const out = tables.map((t) => ({ name: t.name, seats: t.seats.slice() }));
+  const out = tables.map((t) => ({ ...t, seats: t.seats.slice() }));
   const x = out[a[0]]?.seats[a[1]];
   const y = out[b[0]]?.seats[b[1]];
-  if (x === undefined || y === undefined) return out;
+  if (x === undefined || y === undefined || out[a[0]].off?.[a[1]] || out[b[0]].off?.[b[1]]) return out;
   out[a[0]].seats[a[1]] = y;
   out[b[0]].seats[b[1]] = x;
   return out;
@@ -495,4 +610,134 @@ export function seatingCsv(tables: readonly SeatTable[]): string {
   for (const r of lookup(tables)) rows.push([r.name, r.info, r.table, String(r.seat)]);
   // 엑셀이 한글을 제대로 읽도록 BOM 을 붙인다
   return '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n');
+}
+
+// ── 배치도 ────────────────────────────────────────────────────────────────
+
+/** 배치도에서 자리 하나의 크기와 사이 (px) */
+export const SEAT_W = 68;
+export const SEAT_H = 26;
+export const SEAT_GAP = 6;
+
+export interface Box {
+  w: number;
+  h: number;
+}
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/** 둥근 테이블: 자리를 두를 원의 반지름 */
+export const ringRadius = (n: number) => Math.max(74, Math.round((n * 62) / (2 * Math.PI)));
+
+export interface Pod {
+  /** 마주 보는 두 줄에 놓는 2인 책상 수 (한 줄에) */
+  desks: number;
+  /** 왼줄 · 오른줄 자리 수 */
+  row: number;
+  /** 뒤쪽에 칠판을 보게 놓는 책상의 자리 수 (0~2) */
+  side: number;
+}
+
+/**
+ * 모둠 책상. 교실에서 흔히 하듯 2인 책상을 칠판과 직각으로 돌려 마주 보게 붙이고(옆으로 앉아 고개만 돌리면 칠판),
+ * 다섯 명부터는 칠판에서 먼 쪽 끝에 칠판을 바라보는 책상을 하나 더 놓는다 (여섯 명 = 책상 셋).
+ * 자리 번호는 왼줄 앞에서 뒤로, 오른줄 앞에서 뒤로, 그다음 뒤 책상 왼쪽부터.
+ */
+export function podPlan(seats: number): Pod {
+  const n = Math.max(1, Math.floor(seats) || 1);
+  const side = n <= 4 ? 0 : n % 2 ? 1 : 2;
+  const row = Math.ceil((n - side) / 2);
+  return { desks: Math.ceil(row / 2), row, side };
+}
+
+export const POD_DESK_PAD = 9;
+export const POD_DESK_H = SEAT_H + POD_DESK_PAD;
+export const POD_CAPTION = 24;
+
+/** 테이블 하나가 배치도에서 차지하는 크기. vertical 은 긴 탁자를 세로로 놓을 때 */
+export function tableBox(shape: Shape, seats: number, vertical = false): Box {
+  const n = Math.max(1, Math.floor(seats) || 1);
+  if (shape === 'round') {
+    const r = ringRadius(n);
+    return { w: (r + 14) * 2 + SEAT_W + 8, h: r * 2 + SEAT_H + 18 };
+  }
+  if (shape === 'long') {
+    const half = Math.ceil(n / 2);
+    const run = (size: number) => half * size + (half - 1) * SEAT_GAP;
+    return vertical ? { w: SEAT_W * 2 + SEAT_GAP * 2 + 96, h: Math.max(run(SEAT_H), 64) } : { w: Math.max(run(SEAT_W), 150), h: SEAT_H * 2 + SEAT_GAP * 2 + 34 };
+  }
+  if (shape === 'pod') {
+    const p = podPlan(n);
+    // 책상 하나 = 자리 둘 + 사이 4 + 테두리와 안쪽 여백 9. 마주 보는 책상은 세로로 서 있다
+    const across = (seats: number) => seats * SEAT_W + (seats - 1) * 4 + POD_DESK_PAD;
+    const down = (seats: number) => seats * SEAT_H + (seats - 1) * 4 + POD_DESK_PAD;
+    const column = Math.floor(p.row / 2) * down(2) + (p.row % 2 ? down(1) : 0) + (p.desks - 1) * 4;
+    return { w: Math.max(across(1) * 2 + 4, p.side ? across(p.side) : 0), h: POD_CAPTION + column + (p.side ? 4 + POD_DESK_H : 0) };
+  }
+  return { w: n * SEAT_W + (n - 1) * SEAT_GAP, h: SEAT_H };
+}
+
+/** 줄 맞춤에서 책상 묶음 사이 통로 (자리 사이 간격에 더해) */
+export const AISLE = 22;
+
+/**
+ * 테이블을 열 · 행 격자로 놓는다. 앞(칠판)에 가까운 행부터, 왼쪽 열부터 차례로.
+ * 열 너비 · 행 높이는 그 열 · 행에서 가장 큰 테이블에 맞추고, 칸 안에서는 가운데에. 격자 전체는 width 가운데에.
+ */
+export function gridPlace(
+  boxes: readonly Box[], cols: number, width = 0, gapX = 28, gapY = 30, top = 0, slots?: readonly number[],
+): { at: Point[]; w: number } {
+  // slots: 테이블마다 격자 칸 번호. 치운 칸은 비워 두되 자리는 지킨다 (가장 큰 테이블 크기로)
+  const cell = (i: number) => slots?.[i] ?? i;
+  const count = Math.max(boxes.length, ...boxes.map((_, i) => cell(i) + 1));
+  const c = Math.max(1, Math.min(count || 1, Math.floor(cols) || 1));
+  const rows = Math.ceil(count / c);
+  const maxW = Math.max(0, ...boxes.map((b) => b.w));
+  const maxH = Math.max(0, ...boxes.map((b) => b.h));
+  const pick = (f: (i: number) => boolean, get: (b: Box) => number, fallback: number) => {
+    const v = boxes.filter((_, i) => f(i)).map(get);
+    return v.length ? Math.max(...v) : fallback;
+  };
+  const colW = Array.from({ length: c }, (_, j) => pick((i) => cell(i) % c === j, (b) => b.w, maxW));
+  const rowH = Array.from({ length: rows }, (_, r) => pick((i) => Math.floor(cell(i) / c) === r, (b) => b.h, maxH));
+  const gridW = colW.reduce((a, b) => a + b, 0) + (c - 1) * gapX;
+  const w = Math.max(width, gridW);
+  const left = Math.round((w - gridW) / 2);
+  const xs = colW.map((_, j) => left + colW.slice(0, j).reduce((a, b) => a + b, 0) + j * gapX);
+  const ys = rowH.map((_, r) => top + rowH.slice(0, r).reduce((a, b) => a + b, 0) + r * gapY);
+  const at = boxes.map((b, i) => {
+    const j = cell(i) % c;
+    const r = Math.floor(cell(i) / c);
+    return { x: xs[j] + Math.round((colW[j] - b.w) / 2), y: ys[r] + Math.round((rowH[r] - b.h) / 2) };
+  });
+  return { at, w };
+}
+
+/** 놓인 테이블을 모두 담는 크기 */
+export function planSize(boxes: readonly Box[], at: readonly Point[], minW = 0): Box {
+  let w = minW;
+  let h = 0;
+  boxes.forEach((b, i) => {
+    w = Math.max(w, (at[i]?.x ?? 0) + b.w);
+    h = Math.max(h, (at[i]?.y ?? 0) + b.h);
+  });
+  return { w, h };
+}
+
+/** 소속(첫 부가 정보) */
+export const groupOf = (s: { info: string } | null) => (s?.info ? s.info.split(' · ')[0] : '');
+
+/** 배치도에 나온 소속과 인원. 처음 나온 순서대로 — 색은 이 순서로 매긴다 */
+export function seatGroups(tables: readonly SeatTable[]): { name: string; count: number }[] {
+  const by = new Map<string, number>();
+  for (const t of tables) for (const s of t.seats) if (s && groupOf(s)) by.set(groupOf(s), (by.get(groupOf(s)) ?? 0) + 1);
+  return [...by].map(([name, count]) => ({ name, count }));
+}
+
+/** 소속 색. 서로 멀리 떨어진 색상부터 쓴다 */
+export function groupHue(i: number): number {
+  const HUES = [210, 25, 140, 330, 265, 50, 180, 0, 95, 295, 230, 160];
+  return i < HUES.length ? HUES[i] : Math.round((i * 137.508) % 360);
 }

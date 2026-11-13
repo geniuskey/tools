@@ -54,6 +54,8 @@ export interface SplitOptions {
   apart?: number[][];
   /** 같은 조에 넣을 사람 묶음 */
   together?: number[][];
+  /** 조마다 맞출 인원 (합이 사람 수). 없으면 teams 개로 고르게 */
+  sizes?: number[];
   rand?: Rand;
 }
 
@@ -81,7 +83,7 @@ const W_APART = 1_000;
 export function splitTeams(people: readonly Participant[], opts: SplitOptions): SplitResult {
   const rand = opts.rand ?? cryptoRand;
   const n = people.length;
-  const target = teamSizes(n, opts.teams);
+  const target = opts.sizes?.length ? opts.sizes.slice() : teamSizes(n, opts.teams);
   const k = target.length;
   if (n === 0) return { teams: target.map(() => []), unmet: [] };
 

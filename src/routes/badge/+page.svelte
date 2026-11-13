@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import ToolShell from '$lib/ui/ToolShell.svelte';
   import Face from '$lib/badge/Face.svelte';
+  import Plan, { type Layout, type OffChange } from '$lib/badge/Plan.svelte';
   import { load, save } from '$lib/storage';
   import { downloadBlob, timestamp } from '$lib/download';
   import { dedupeText, parseParticipants, sampleText } from '$lib/raffle/core';
@@ -10,8 +11,8 @@
   import { contrast, defaultStyle, renderSvg } from '$lib/qr/render';
   import {
     DEFAULT_CUSTOM, PAPERS, PRESETS, assignSeats, badgeLayout, cellRects, checkGrid, customGrid, fillTemplate, lookup, lookupText, mm, paginate, perPage,
-    presetGrid, presetName, seatIndex, seated, seatingCsv, seatingText, suggestTables, swapSeats, tableName, tentGrid, toTables,
-    type Band, type CustomSheet, type Measure, type Method, type PaperId, type SeatRef, type SeatTable, type Shape,
+    offKey, openCount, openSlots, presetGrid, presetName, reshape, seatIndex, seated, seatingCsv, seatingText, suggestTables, swapSeats, tableName, tentGrid, toTables,
+    type Band, type CustomSheet, type Measure, type Method, type Offs, type PaperId, type SeatRef, type SeatTable, type Shape,
   } from '$lib/badge/core';
 
   const KEY = 'tools:badge:v1';
@@ -65,17 +66,31 @@
 
   // 좌석표
   let shape = $state<Shape>('round');
-  let tableCount = $state(3);
+  // 테이블: n 자리 × m 열 × j 행. 줄 맞춤: n 자리 책상 × m 열 × j 행 (책상 사이는 통로)
   let seatsPer = $state(8);
+  let tableCols = $state(3);
+  let tableRows = $state(1);
+  let deskSeats = $state(2);
+  let deskCols = $state(3);
   let rowCount = $state(4);
-  let colCount = $state(6);
   let method = $state<Method>('random');
   let apartText = $state('');
   let togetherText = $state('');
   let tables = $state<SeatTable[] | null>(null);
   let planShape = $state<Shape>('round');
+  // 긴 탁자 방향, 손으로 옮긴 테이블 자리, 소속 색
+  let longDir = $state<'h' | 'v'>('h');
+  let planDir = $state<'h' | 'v'>('h');
+  /** 배치도를 그릴 때의 열 수와 (줄 맞춤) 통로 간격 */
+  let planCols = $state(3);
+  let planBlock = $state(0);
+  let layout = $state<Layout | null>(null);
+  let colorBy = $state(false);
+  let plan = $state<Plan>();
   let unmet = $state<string[]>([]);
   let picked = $state<SeatRef | null>(null);
+  /** 배치도에서 막거나 치운 자리 · 책상 · 테이블 (격자 칸 기준) */
+  let offs = $state<Offs>({});
 
   const parsed = $derived(parseParticipants(text));
   const people = $derived(parsed.list);
@@ -217,10 +232,37 @@
   const edited = $derived(Object.keys(overrides).length);
 
   // ── 좌석표 ──
-  const groupsN = $derived(shape === 'rows' ? int(rowCount) : int(tableCount));
-  const seatsN = $derived(shape === 'rows' ? int(colCount, 1, 60) : int(seatsPer, 1, 30));
-  const capacity = $derived(groupsN * seatsN);
-  const need = $derived(suggestTables(people.length, seatsN));
+  const rowsMode = $derived(shape === 'rows');
+  const colsN = $derived(rowsMode ? int(deskCols, 1, 20) : int(tableCols, 1, 20));
+  const rowsN = $derived(rowsMode ? int(rowCount, 1, 200) : int(tableRows, 1, 100));
+  const blockN = $derived(rowsMode ? int(deskSeats, 1, 20) : int(seatsPer, 1, 30));
+  /** 테이블(줄) 수와 한 테이블(줄)의 자리 수 */
+  const groupsN = $derived(rowsMode ? rowsN : colsN * rowsN);
+  const seatsN = $derived(rowsMode ? Math.min(120, blockN * colsN) : blockN);
+  /** 칸마다 막거나 치운 자리 수 (치운 테이블은 Infinity) */
+  const offPerSlot = $derived.by(() => {
+    const m = new Map<number, number>();
+    for (const [k, v] of Object.entries(offs)) {
+      const [slot, seat] = k.split(':').map(Number);
+      if (v === 'removed') m.set(slot, Infinity);
+      else if (seat < seatsN) m.set(slot, (m.get(slot) ?? 0) + 1);
+    }
+    return m;
+  });
+  const openIn = (slot: number) => Math.max(0, seatsN - (offPerSlot.get(slot) ?? 0));
+  const capacity = $derived(Array.from({ length: groupsN }, (_, i) => openIn(i)).reduce((a, b) => a + b, 0));
+  /** 모두 앉으려면 몇 행이 필요한가 (막은 자리는 빼고) */
+  const needRows = $derived.by(() => {
+    const per = rowsMode ? 1 : colsN;
+    let cap = 0;
+    for (let r = 1; r <= 2000; r++) {
+      for (let c = 0; c < per; c++) cap += openIn((r - 1) * per + c);
+      if (cap >= people.length) return r;
+    }
+    return rowsN;
+  });
+  /** 치운 테이블(줄)의 칸 */
+  const holes = $derived(Array.from({ length: groupsN }, (_, i) => i).filter((i) => offs[offKey(i)] === 'removed'));
   const apart = $derived(parseGroups(apartText, people));
   const together = $derived(parseGroups(togetherText, people));
   const unknown = $derived([...new Set([...apart.unknown, ...together.unknown])]);
@@ -230,23 +272,63 @@
   const standing = $derived(tables && seatOf ? people.filter((p) => !seatOf.has(p.key)).map((p) => p.name) : []);
   const rowsOf = $derived(tables ? lookup(tables) : []);
 
+  // 자리 · 열 · 행 칸: 비우는 중에는 그대로 두고, 숫자가 들어오면 지금 모양의 값을 바꾼다
+  const typed = (v: string, set: (n: number) => void) => Number(v) >= 1 && set(Math.floor(Number(v)));
+  const setBlock = (v: string) => typed(v, (n) => (rowsMode ? (deskSeats = n) : (seatsPer = n)));
+  const setCols = (v: string) => typed(v, (n) => (rowsMode ? (deskCols = n) : (tableCols = n)));
+  const setRows = (v: string) => typed(v, (n) => (rowsMode ? (rowCount = n) : (tableRows = n)));
+
+  /** 명단이 비어 있어도 빈 자리로 배치도를 그려 모양을 보여 준다 */
   function assign() {
-    if (!people.length) return;
     // 고쳐 둔 테이블 이름은 다시 배치해도 남긴다 (자리 모양을 바꾸면 새로)
     const keep = (shape === planShape && tables?.map((t, i) => (t.name === tableName(i, planShape) ? '' : t.name))) || [];
+    // 모양 · 열 · 자리 수가 바뀌면 막아 둔 칸이 다른 자리를 가리키니 비운다 (행 수만 바뀌면 그대로)
+    if (tables && (shape !== planShape || colsN !== planCols || tables[0]?.seats.length !== seatsN)) offs = {};
+    let g = openSlots(offs, groupsN, seatsN);
+    if (!g.slots.length) (offs = {}), (g = openSlots(offs, groupsN, seatsN));
     const r = assignSeats(people, {
-      tables: groupsN,
+      tables: g.slots.length,
       seats: seatsN,
+      caps: g.off.map((o) => o.filter((x) => !x).length),
       method,
       front: shape === 'rows',
       apart: constrained ? apart.groups : [],
       together: constrained ? together.groups : [],
     });
-    tables = toTables(r, people, seatsN, shape, keep);
+    // 모양이나 테이블 수가 바뀌면 옮겨 둔 자리는 맞지 않는다
+    if (shape !== planShape || longDir !== planDir || colsN !== planCols || tables?.length !== r.tables.length || tables[0]?.seats.length !== seatsN) layout = null;
+    tables = toTables(r, people, seatsN, shape, keep, g);
     planShape = shape;
+    planDir = longDir;
+    planCols = colsN;
+    planBlock = rowsMode && colsN > 1 ? blockN : 0;
+    if (method === 'group' && hasInfo) colorBy = true;
     unmet = r.unmet.map(([a, b]) => `${people[a].name} · ${people[b].name}`);
     picked = null;
   }
+  // 설정을 바꾸면 바로 다시 앉힌다. 무엇이 바뀌었는지는 이 열쇠로 본다.
+  // 떨어뜨리기 · 묶기는 이름이 명단과 맞아떨어진 묶음만 (치는 도중에는 그대로)
+  const groupKey = (gs: number[][]) => gs.map((g) => g.map((i) => people[i]?.key));
+  const settingsKey = $derived(
+    JSON.stringify([shape, colsN, rowsN, blockN, method, shape === 'long' ? longDir : '', constrained ? [groupKey(apart.groups), groupKey(together.groups)] : []]),
+  );
+  let lastKey: string | null = null;
+  $effect(() => {
+    const key = settingsKey;
+    if (!ready || mode !== 'seat') return;
+    // 좌석표를 처음 열면: 저장해 둔 배치가 있으면 그대로, 없으면 바로 그린다
+    if (lastKey === null) {
+      lastKey = key;
+      if (!untrack(() => tables)) untrack(assign);
+    } else if (key !== lastKey) {
+      lastKey = key;
+      untrack(assign);
+    }
+  });
+  // 빈 배치도에 명단이 들어오면 바로 앉힌다. 이미 앉은 사람이 있으면 손댄 자리를 지키고 알려만 준다
+  $effect(() => {
+    if (ready && mode === 'seat' && people.length && tables && seatedN === 0 && capacity > 0) untrack(assign);
+  });
   function pick(t: number, s: number) {
     if (!tables) return;
     if (!picked) picked = [t, s];
@@ -256,19 +338,38 @@
       picked = null;
     }
   }
-  const isPicked = (t: number, s: number) => picked != null && picked[0] === t && picked[1] === s;
-  const seatLabel = (t: SeatTable, s: number) => `${t.name} ${s + 1}번 자리: ${t.seats[s]?.name ?? '빈 자리'}`;
+  /** 배치도 오른쪽 클릭: 막기 · 치우기 · 되돌리기. 다시 섞지 않고 막힌 자리의 사람만 옮긴다 */
+  function setOff(changes: OffChange[]) {
+    const next = { ...offs };
+    for (const [k, v] of changes) v == null ? delete next[k] : (next[k] = v);
+    // 테이블을 모두 치울 수는 없다
+    if (!openSlots(next, groupsN, seatsN).slots.length) return say('테이블을 모두 치울 수는 없습니다');
+    offs = next;
+    picked = null;
+    if (!tables) return assign();
+    // 자리가 없던 사람도 빈 자리가 생기면 앉힌다
+    const waiting = seatOf ? people.filter((p) => !seatOf.has(p.key)).map((p) => ({ name: p.name, info: p.info, key: p.key })) : [];
+    const r = reshape(tables, next, groupsN, seatsN, planShape, waiting);
+    // 손으로 옮긴 테이블 자리는 칸을 따라간다. 되돌린 테이블이 있으면 가지런히 다시
+    if (layout) {
+      const old = new Map(tables.map((t, i) => [t.slot ?? i, layout!.at[i]]));
+      const at = r.tables.map((t) => old.get(t.slot!));
+      layout = at.every(Boolean) ? { w: layout.w, at: at as NonNullable<(typeof at)[number]>[] } : null;
+    }
+    tables = r.tables;
+    const out = r.left.length - waiting.length;
+    if (out > 0) say(`자리가 모자라 ${out}명이 빠졌습니다`);
+  }
+  const restoreAll = () => setOff(Object.keys(offs).map((k) => [k, null]));
+  function swap(a: SeatRef, b: SeatRef) {
+    if (!tables) return;
+    tables = swapSeats(tables, a, b);
+    picked = null;
+  }
   function saveCsv() {
     if (tables) downloadBlob(new Blob([seatingCsv(tables)], { type: 'text/csv;charset=utf-8' }), `좌석표-${timestamp()}.csv`);
   }
   /** 둥근 테이블: 자리 수에 맞춘 반지름(px)과 자리마다의 위치 */
-  const ring = (n: number) => Math.max(74, Math.round((n * 62) / (2 * Math.PI)));
-  const around = (i: number, n: number, r: number) => {
-    const a = (-90 + (i * 360) / n) * (Math.PI / 180);
-    // 이름이 가로로 길어 좌우를 조금 더 벌린다
-    return { x: Math.cos(a) * (r + 14), y: Math.sin(a) * r };
-  };
-
   function onKey(e: KeyboardEvent) {
     if (e.key !== 'Escape') return;
     picked = null;
@@ -304,24 +405,41 @@
     bool('qrOn', (v) => (qrOn = v));
     str('qrText', (v) => (qrText = v));
     if (s.overrides && typeof s.overrides === 'object') overrides = s.overrides;
-    if (['round', 'long', 'rows'].includes(s.shape)) shape = s.shape;
-    num('tableCount', (v) => (tableCount = v));
+    if (['round', 'long', 'pod', 'rows'].includes(s.shape)) shape = s.shape;
     num('seatsPer', (v) => (seatsPer = v));
+    num('tableCols', (v) => (tableCols = v));
+    num('tableRows', (v) => (tableRows = v));
+    num('deskSeats', (v) => (deskSeats = v));
+    num('deskCols', (v) => (deskCols = v));
     num('rowCount', (v) => (rowCount = v));
-    num('colCount', (v) => (colCount = v));
+    // 예전에 저장한 '테이블 수' · '한 줄 자리'
+    if (s.tableCols == null && Number(s.tableCount) >= 1) {
+      tableCols = Math.min(4, Math.floor(Number(s.tableCount)));
+      tableRows = Math.ceil(Number(s.tableCount) / tableCols);
+    }
+    if (s.deskSeats == null && Number(s.colCount) >= 1) (deskSeats = Math.min(20, Math.floor(Number(s.colCount)))), (deskCols = 1);
+    num('planCols', (v) => (planCols = v));
+    if (s.offs && typeof s.offs === 'object')
+      offs = Object.fromEntries(Object.entries(s.offs).filter(([k, v]) => /^\d+(:\d+)?$/.test(k) && ['closed', 'gone', 'removed'].includes(v as string))) as Offs;
+    if (Number(s.planBlock) >= 0) planBlock = Math.floor(Number(s.planBlock));
     if (METHODS.some(([m]) => m === s.method)) method = s.method;
     str('apartText', (v) => (apartText = v));
     str('togetherText', (v) => (togetherText = v));
     if (Array.isArray(s.tables) && s.tables.every((t: any) => t && typeof t.name === 'string' && Array.isArray(t.seats))) tables = s.tables;
-    if (['round', 'long', 'rows'].includes(s.planShape)) planShape = s.planShape;
+    if (['round', 'long', 'pod', 'rows'].includes(s.planShape)) planShape = s.planShape;
+    if (s.longDir === 'v') longDir = 'v';
+    if (s.planDir === 'v') planDir = 'v';
+    bool('colorBy', (v) => (colorBy = v));
+    const L = s.layout;
+    if (L && Number.isFinite(L.w) && Array.isArray(L.at) && L.at.every((p: any) => p && Number.isFinite(p.x) && Number.isFinite(p.y))) layout = { w: L.w, at: L.at.map((p: any) => ({ x: p.x, y: p.y })) };
     measures = { name: makeMeasure(800), info: makeMeasure(500) };
     ready = true;
   });
   $effect(() => {
     const snap = {
       text, mode, paper, layoutId, custom: $state.snapshot(custom), start, cut, border, event, accent, band, align, logo, logoAspect, showInfo, showNo, showTable,
-      qrOn, qrText, overrides: $state.snapshot(overrides), shape, tableCount, seatsPer, rowCount, colCount, method, apartText, togetherText,
-      tables: $state.snapshot(tables), planShape,
+      qrOn, qrText, overrides: $state.snapshot(overrides), shape, seatsPer, tableCols, tableRows, deskSeats, deskCols, rowCount, method, apartText, togetherText,
+      tables: $state.snapshot(tables), planShape, longDir, planDir, planCols, planBlock, offs: $state.snapshot(offs), colorBy, layout: $state.snapshot(layout),
     };
     if (ready) save(KEY, snap);
   });
@@ -329,12 +447,6 @@
 
 <svelte:window onkeydown={onKey} />
 <svelte:head>{@html pageCss}</svelte:head>
-
-{#snippet seatButton(t: SeatTable, ti: number, si: number)}
-  <button class="seat" class:free={!t.seats[si]} aria-pressed={isPicked(ti, si)} aria-label={seatLabel(t, si)} title={t.seats[si]?.info || undefined} onclick={() => pick(ti, si)}>
-    {t.seats[si]?.name ?? '빈 자리'}
-  </button>
-{/snippet}
 
 <ToolShell tool="badge">
   {#snippet actions()}
@@ -562,28 +674,39 @@
         <h2>자리 모양</h2>
         <div class="f">
           <div class="seg" role="group" aria-label="자리 모양">
-            <button aria-pressed={shape === 'round'} onclick={() => (shape = 'round')}>둥근 테이블</button>
+            <button aria-pressed={shape === 'round'} onclick={() => (shape = 'round')}>원탁</button>
             <button aria-pressed={shape === 'long'} onclick={() => (shape = 'long')}>긴 탁자</button>
+            <button aria-pressed={shape === 'pod'} onclick={() => ((shape = 'pod'), seatsPer > 8 && (seatsPer = 6))} title="2인 책상을 칠판과 직각으로 마주 붙이고, 뒤쪽 끝에 칠판을 보는 책상 하나">모둠 책상</button>
             <button aria-pressed={shape === 'rows'} onclick={() => (shape = 'rows')}>줄 맞춤</button>
           </div>
         </div>
-        <div class="inline">
-          {#if shape === 'rows'}
-            <input class="field num" type="number" min="1" max="999" bind:value={rowCount} aria-label="줄 수" /><span>줄 ×</span>
-            <input class="field num" type="number" min="1" max="60" bind:value={colCount} aria-label="한 줄 자리" /><span>자리</span>
-          {:else}
-            <input class="field num" type="number" min="1" max="999" bind:value={tableCount} aria-label="테이블 수" /><span>개 ×</span>
-            <input class="field num" type="number" min="1" max="30" bind:value={seatsPer} aria-label="테이블당 자리" /><span>자리</span>
-          {/if}
+        {#if shape === 'long'}
+          <div class="inline">
+            <span>탁자 방향</span>
+            <div class="seg" role="group" aria-label="탁자 방향">
+              <button aria-pressed={longDir === 'h'} onclick={() => (longDir = 'h')}>가로</button>
+              <button aria-pressed={longDir === 'v'} onclick={() => (longDir = 'v')}>세로</button>
+            </div>
+          </div>
+        {:else if shape === 'pod'}
+          <p class="note">2인 책상을 칠판과 직각으로 돌려 마주 붙이고, 다섯 명부터는 칠판에서 먼 쪽 끝에 칠판을 바라보는 책상을 하나 놓습니다. 여섯 자리면 책상 셋입니다.</p>
+        {/if}
+        <div class="inline grid-size">
+          <input class="field num" type="number" min="1" max={rowsMode ? 20 : 30} value={blockN} onblur={(e) => (e.currentTarget.value = String(blockN))} oninput={(e) => setBlock(e.currentTarget.value)} aria-label={rowsMode ? '책상당 자리' : '테이블당 자리'} />
+          <span>자리 ×</span>
+          <input class="field num" type="number" min="1" max="20" value={colsN} onblur={(e) => (e.currentTarget.value = String(colsN))} oninput={(e) => setCols(e.currentTarget.value)} aria-label="열 수" />
+          <span>열 ×</span>
+          <input class="field num" type="number" min="1" max={rowsMode ? 200 : 100} value={rowsN} onblur={(e) => (e.currentTarget.value = String(rowsN))} oninput={(e) => setRows(e.currentTarget.value)} aria-label="행 수" />
+          <span>행</span>
         </div>
         <p class="note fit">
-          <span>자리 {capacity.toLocaleString('ko-KR')}개 · 참가자 {people.length.toLocaleString('ko-KR')}명</span>
-          {#if people.length && need !== groupsN}
-            <button class="btn sm" onclick={() => (shape === 'rows' ? (rowCount = need) : (tableCount = need))}>{shape === 'rows' ? '줄' : '테이블'} {need}개로 맞추기</button>
+          <span>{rowsMode ? `한 줄 ${seatsN}자리 · ${rowsN}줄` : `${shape === 'pod' ? '모둠' : '테이블'} ${groupsN}개`} · 자리 {capacity.toLocaleString('ko-KR')}개 · 참가자 {people.length.toLocaleString('ko-KR')}명</span>
+          {#if people.length && needRows !== rowsN}
+            <button class="btn sm" onclick={() => setRows(String(needRows))}>{needRows}행으로 맞추기</button>
           {/if}
         </p>
         {#if people.length > capacity}
-          <p class="alert" role="alert">자리가 {people.length - capacity}개 모자랍니다. {shape === 'rows' ? '줄' : '테이블'}을 늘리지 않으면 그만큼은 앉지 못합니다.</p>
+          <p class="alert" role="alert">자리가 {people.length - capacity}개 모자랍니다. 행을 늘리지 않으면 그만큼은 앉지 못합니다.</p>
         {/if}
 
         <label class="f">
@@ -606,17 +729,19 @@
           </label>
           {#if unknown.length}<p class="alert">명단에 없는 이름: {unknown.join(', ')}</p>{/if}
         {/if}
-        <button class="btn primary go" disabled={!people.length} onclick={assign}>{tables ? '다시 배치' : '자리 배치'}</button>
+        <label class="check"><input type="checkbox" bind:checked={colorBy} disabled={!hasInfo} /> <span>소속마다 색으로 표시</span></label>
+        <button class="btn primary go" disabled={!people.length} onclick={assign}>다시 배치</button>
         <p class="keys">
-          {method === 'order' || method === 'group' ? shape === 'rows' ? '앞줄부터 차례로 채웁니다.' : '테이블마다 인원이 고르게 나뉩니다.' : '순서는 암호학적 난수로 정합니다.'} 배치한 뒤에는 자리 둘을 차례로 눌러 맞바꿀 수 있고, {shape === 'rows' ? '줄' : '테이블'} 이름도 고칠 수 있습니다.
+          설정을 바꾸면 바로 다시 앉힙니다. {method === 'order' || method === 'group' ? shape === 'rows' ? '앞줄부터 차례로 채웁니다.' : '테이블마다 인원이 고르게 나뉩니다.' : '순서는 암호학적 난수로 정합니다.'} 배치한 뒤에는 자리 둘을 차례로 눌러 맞바꿀 수 있고, {shape === 'rows' ? '줄' : '테이블'} 이름도 고칠 수 있습니다.{shape === 'rows' ? '' : ' 테이블은 끌어서 실제 놓인 자리대로 옮길 수 있습니다.'}
         </p>
       </section>
 
       <section class="panel out results">
         <div class="head noprint">
           <h2>배치도</h2>
-          {#if tables}<span class="count">{planShape === 'rows' ? `${tables.filter((t) => t.seats.some(Boolean)).length}줄` : `테이블 ${tables.length}개`} · {seatedN}명</span>{/if}
+          {#if tables}<span class="count">{planShape === 'rows' ? `${seatedN ? tables.filter((t) => t.seats.some(Boolean)).length : tables.length}줄` : `${planShape === 'pod' ? '모둠' : '테이블'} ${tables.length}개`} · {seatedN}명</span>{/if}
           <div class="head-actions">
+            <button class="btn sm" disabled={!tables} onclick={() => plan?.enter()} title="프로젝터에 띄워 놓고 그대로 앉게 합니다">전체 화면</button>
             <button class="btn sm" disabled={!tables} onclick={() => tables && copy(seatingText(tables))}>복사</button>
             <button class="btn sm" disabled={!tables} onclick={saveCsv}>CSV 저장</button>
             <button class="btn sm primary" disabled={!tables} onclick={() => window.print()}>인쇄</button>
@@ -629,53 +754,13 @@
           </p>
         {/if}
         {#if !tables}
-          <p class="empty">명단을 넣고 <b>자리 배치</b>를 누르세요.<br />테이블마다 인원을 고르게 나누고, 이름으로 자리를 찾는 표도 함께 만듭니다.</p>
+          <p class="empty">배치도를 그리는 중입니다.</p>
         {:else}
           <p class="hint noprint">
-            {#if picked}<b>{tables[picked[0]]?.seats[picked[1]]?.name ?? '빈 자리'}</b> — 바꿀 자리를 누르세요. <kbd>Esc</kbd> 로 그만둡니다.{:else}자리를 누르고 다른 자리를 누르면 서로 바뀝니다. 빈 자리로 옮길 수도 있습니다.{/if}
+            {#if !people.length}자리 모양을 미리 봅니다. <b>참가자 명단</b>에 이름을 넣으면 바로 자리를 채웁니다.{:else if picked}<b>{tables[picked[0]]?.seats[picked[1]]?.name ?? '빈 자리'}</b> — 바꿀 자리를 누르세요. <kbd>Esc</kbd> 로 그만둡니다.{:else}사람을 끌어 다른 자리에 놓거나, 자리를 누르고 다른 자리를 누르면 서로 바뀝니다. 빈 자리로 옮길 수도 있습니다.{planShape === 'rows' ? '' : ' 테이블은 끌어서 옮깁니다.'} 오른쪽 클릭으로 자리 · 책상 · {planShape === 'rows' ? '줄' : '테이블'}을 막거나 치웁니다.{/if}
+            {#if Object.keys(offs).length}<button class="link" onclick={restoreAll}>막거나 치운 것 모두 되돌리기</button>{/if}
           </p>
-          <h3 class="print-title">{event || '좌석표'}</h3>
-          {#if planShape === 'rows'}
-            <div class="hall">
-              <div class="front">앞</div>
-              {#each tables as t, ti (ti)}
-                <div class="row">
-                  <input class="tname" bind:value={t.name} aria-label="{ti + 1}번째 줄 이름" />
-                  <div class="row-seats" style:grid-template-columns="repeat({t.seats.length}, minmax(0, 1fr))">
-                    {#each t.seats as _, si (si)}{@render seatButton(t, ti, si)}{/each}
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {:else}
-            <div class="plan">
-              {#each tables as t, ti (ti)}
-                {#if planShape === 'round'}
-                  {@const r = ring(t.seats.length)}
-                  <div class="round" style:width="{(r + 14) * 2 + 76}px" style:height="{r * 2 + 44}px">
-                    <div class="disc" style:width="{(r - 30) * 2}px" style:height="{(r - 30) * 2}px">
-                      <input class="tname" bind:value={t.name} aria-label="{ti + 1}번 테이블 이름" />
-                      <span>{t.seats.filter(Boolean).length}명</span>
-                    </div>
-                    {#each t.seats as _, si (si)}
-                      {@const at = around(si, t.seats.length, r)}
-                      <div class="spot" style:left="calc(50% + {at.x}px)" style:top="calc(50% + {at.y}px)">{@render seatButton(t, ti, si)}</div>
-                    {/each}
-                  </div>
-                {:else}
-                  {@const half = Math.ceil(t.seats.length / 2)}
-                  <div class="long" style:grid-template-columns="repeat({half}, 68px)">
-                    {#each t.seats.slice(0, half) as _, si (si)}{@render seatButton(t, ti, si)}{/each}
-                    <div class="bar">
-                      <input class="tname" bind:value={t.name} aria-label="{ti + 1}번 테이블 이름" />
-                      <span>{t.seats.filter(Boolean).length}명</span>
-                    </div>
-                    {#each t.seats.slice(half) as _, si (si)}{@render seatButton(t, ti, half + si)}{/each}
-                  </div>
-                {/if}
-              {/each}
-            </div>
-          {/if}
+          <Plan bind:this={plan} bind:tables bind:layout shape={planShape} vertical={planDir === 'v'} cols={planCols} block={planBlock} {colorBy} title={event} {picked} onpick={pick} onswap={swap} {holes} onoff={setOff} />
 
           <div class="lookup">
             <div class="head">
@@ -854,6 +939,18 @@
   .inline .num {
     width: 72px;
   }
+  .grid-size {
+    gap: 6px;
+  }
+  .grid-size .num {
+    width: 0;
+    flex: 1 1 0;
+    min-width: 48px;
+    max-width: 72px;
+  }
+  .grid-size span {
+    white-space: nowrap;
+  }
   .checks {
     display: flex;
     flex-wrap: wrap;
@@ -922,9 +1019,6 @@
     color: var(--faint);
     font-size: 13.5px;
     line-height: 1.8;
-  }
-  .empty b {
-    color: var(--muted);
   }
 
   /* 이름표 미리보기: 종이를 실제 mm 로 그리고 통째로 줄여 보여 준다 */
@@ -1000,131 +1094,6 @@
     accent-color: var(--app);
   }
 
-  /* 배치도 */
-  .plan {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 18px 14px;
-  }
-  .round {
-    position: relative;
-    flex: none;
-  }
-  .disc {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    background: var(--app-soft);
-    border: 1.5px solid var(--app-line);
-    font-size: 11.5px;
-    color: var(--muted);
-  }
-  .spot {
-    position: absolute;
-    transform: translate(-50%, -50%);
-  }
-  .seat {
-    width: 68px;
-    height: 26px;
-    padding: 0 5px;
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    background: var(--surface);
-    font-size: 12.5px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .seat:hover {
-    border-color: var(--app);
-  }
-  .seat.free {
-    border-style: dashed;
-    color: var(--faint);
-    font-weight: 400;
-    font-size: 11.5px;
-    background: transparent;
-  }
-  .seat[aria-pressed='true'] {
-    background: var(--app);
-    border-color: var(--app);
-    color: var(--on-app);
-  }
-  .tname {
-    width: 100%;
-    min-width: 0;
-    padding: 1px 4px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
-    font-size: 13px;
-    font-weight: 700;
-    text-align: center;
-    color: var(--text);
-  }
-  .tname:hover,
-  .tname:focus {
-    border-color: var(--app-line);
-    background: var(--surface);
-  }
-  .long {
-    display: grid;
-    gap: 6px;
-    padding: 4px;
-  }
-  .bar {
-    grid-column: 1 / -1;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    border-radius: 10px;
-    background: var(--app-soft);
-    border: 1.5px solid var(--app-line);
-    font-size: 11.5px;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-  .hall {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-    overflow-x: auto;
-    padding-bottom: 4px;
-  }
-  .front {
-    margin: 0 0 6px 70px;
-    padding: 4px;
-    border-radius: 8px;
-    background: var(--app-soft);
-    border: 1.5px solid var(--app-line);
-    text-align: center;
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--muted);
-  }
-  .row {
-    display: grid;
-    grid-template-columns: 62px minmax(0, 1fr);
-    align-items: center;
-    gap: 8px;
-  }
-  .row-seats {
-    display: grid;
-    gap: 5px;
-  }
-  .row .seat {
-    width: 100%;
-    min-width: 46px;
-  }
   .lookup {
     display: grid;
     gap: 10px;
@@ -1165,9 +1134,6 @@
   }
   .l-seat b {
     color: var(--text);
-  }
-  .print-title {
-    display: none;
   }
 
   .toast {
@@ -1286,26 +1252,6 @@
     }
     .cell {
       outline: none !important;
-    }
-    .print-title {
-      display: block;
-      margin-bottom: 8mm;
-      font-size: 20pt;
-      text-align: center;
-    }
-    .plan > *,
-    .row {
-      break-inside: avoid;
-    }
-    .seat,
-    .disc,
-    .bar,
-    .front {
-      -webkit-print-color-adjust: exact;
-      print-color-adjust: exact;
-    }
-    .seat.free {
-      color: transparent;
     }
     .lookup {
       break-before: page;

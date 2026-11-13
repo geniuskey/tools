@@ -161,20 +161,29 @@ test('좌석표', async () => {
   const { browser, page, errors } = await open('/badge');
   await page.getByLabel('참가자 명단').fill(Array.from({ length: 24 }, (_, i) => `사람${String(i + 1).padStart(2, '0')}\t${DEPTS[i % 4]}`).join('\n'));
   await page.getByRole('button', { name: '좌석표' }).click();
-  assert.match(await page.locator('.results .empty').innerText(), /자리 배치/);
+  // 좌석표를 열면 바로 배치도가 나오고, 설정을 바꾸면 그때그때 다시 앉힌다
+  assert.equal(await page.locator('.canvas .tbl.round').count(), 3);
+  assert.equal(await page.locator('.results > .head .count').innerText(), '테이블 3개 · 24명');
   // 테이블 수 맞추기
   await page.getByLabel('테이블당 자리').fill('6');
+  assert.equal(await page.locator('.canvas .tbl.round').first().locator('.seat').count(), 6);
   assert.match(await page.locator('.note.fit').innerText(), /자리 18개 · 참가자 24명/);
   assert.match(await page.locator('.setup [role=alert]').innerText(), /자리가 6개 모자랍니다/);
-  await page.getByRole('button', { name: '테이블 4개로 맞추기' }).click();
-  assert.equal(await page.getByLabel('테이블 수').inputValue(), '4');
+  // 자리 × 열 × 행: 모자라면 행을 늘려 맞추고, 열을 줄여 2 × 2 로
+  await page.getByRole('button', { name: '2행으로 맞추기' }).click();
+  assert.equal(await page.getByLabel('행 수').inputValue(), '2');
+  assert.equal(await page.locator('.canvas .tbl.round').count(), 6);
+  await page.getByLabel('열 수').fill('2');
+  assert.match(await page.locator('.note.fit').innerText(), /테이블 4개 · 자리 24개 · 참가자 24명/);
+  const cells = await page.locator('.canvas .tbl').evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; }));
+  assert.ok(cells[0][1] === cells[1][1] && cells[0][0] < cells[1][0], JSON.stringify(cells));
+  assert.ok(cells[2][0] === cells[0][0] && cells[2][1] > cells[0][1], '셋째는 다음 행 첫 열');
   await page.getByLabel('앉히는 방법').selectOption('mix');
   await page.getByLabel('떨어뜨릴 사람').fill('사람01, 사람02, 사람03, 없는사람');
   await page.getByLabel('같은 테이블에 넣을 사람').fill('사람05, 사람06');
   assert.match(await page.locator('.setup .alert').innerText(), /명단에 없는 이름: 없는사람/);
-  await page.getByRole('button', { name: '자리 배치' }).click();
 
-  const read = () => page.locator('.plan > *').evaluateAll((els) => els.map((e) => [...e.querySelectorAll('.seat')].map((s) => ({ name: s.textContent!.trim(), info: s.getAttribute('title') ?? '' }))));
+  const read = () => page.locator('.canvas .tbl').evaluateAll((els) => els.map((e) => [...e.querySelectorAll('.seat')].map((s) => ({ name: s.textContent!.trim(), info: s.getAttribute('title') ?? '' }))));
   for (let round = 0; round < 3; round++) {
     const tables = await read();
     assert.deepEqual(tables.map((t) => t.length), [6, 6, 6, 6]);
@@ -195,6 +204,20 @@ test('좌석표', async () => {
   await page.getByRole('button', { name: `3번 테이블 4번 자리: ${b}` }).click();
   const after = await read();
   assert.deepEqual([after[0][0].name, after[2][3].name], [b, a]);
+
+  // 사람을 끌어 다른 자리에 놓아 맞바꾸기 (고르기는 남지 않는다)
+  const [c, d] = [after[0][1].name, after[1][2].name];
+  const src = (await page.getByRole('button', { name: `1번 테이블 2번 자리: ${c}` }).boundingBox())!;
+  const dst = (await page.getByRole('button', { name: `2번 테이블 3번 자리: ${d}` }).boundingBox())!;
+  await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(dst.x + dst.width / 2, dst.y + dst.height / 2, { steps: 8 });
+  assert.equal(await page.locator('.carry').innerText(), c);
+  await page.mouse.up();
+  const dragged = await read();
+  assert.deepEqual([dragged[0][1].name, dragged[1][2].name], [d, c]);
+  assert.equal(await page.locator('.seat[aria-pressed="true"]').count(), 0);
+  assert.equal(await page.locator('.carry').count(), 0);
   await page.getByLabel('1번 테이블 이름').fill('신랑측');
 
   // 이름으로 찾는 표: 가나다순
@@ -220,7 +243,7 @@ test('좌석표', async () => {
 
   // 새로 열어도 같은 자리, 이름표에 테이블이 들어간다
   await page.reload({ waitUntil: 'networkidle' });
-  assert.deepEqual(await read(), after);
+  assert.deepEqual(await read(), dragged);
   assert.equal(await page.getByLabel('1번 테이블 이름').inputValue(), '신랑측');
   await page.getByRole('button', { name: '이름표', exact: true }).click();
   await page.getByLabel('테이블', { exact: true }).check();
@@ -230,22 +253,186 @@ test('좌석표', async () => {
   // 긴 탁자, 줄 맞춤
   await page.getByRole('button', { name: '좌석표' }).click();
   await page.getByRole('button', { name: '긴 탁자' }).click();
-  await page.getByRole('button', { name: '다시 배치' }).click();
-  assert.equal(await page.locator('.plan .long').count(), 4);
+  assert.equal(await page.locator('.tbl.long').count(), 4);
+  // 방향: 세로로 돌리면 좁고 길어진다
+  const wide = (await page.locator('.tbl.long').first().boundingBox())!;
+  await page.getByRole('group', { name: '탁자 방향' }).getByRole('button', { name: '세로' }).click();
+  const tall = (await page.locator('.tbl.long').first().boundingBox())!;
+  assert.notDeepEqual([wide.width, wide.height], [tall.width, tall.height]);
+  // 세로 탁자는 한쪽 자리가 위아래로 놓인다
+  const xs = await page.locator('.tbl.long').first().locator('.side').first().locator('.seat').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().x)));
+  assert.equal(new Set(xs).size, 1, JSON.stringify(xs));
+  assert.equal(await page.locator('.tbl.long.vertical').count(), 4);
   assert.equal(await page.getByLabel('1번 테이블 이름').inputValue(), '1번 테이블', '자리 모양을 바꾸면 이름도 새로');
   await page.screenshot({ path: `${SHOTS}/badge-seating-long.png`, fullPage: true });
+  // 어떤 모양이든 앞이 어디인지 보인다
+  assert.match(await page.locator('.front').innerText(), /^앞/);
+
+  // 모둠 책상: 2인 책상을 칠판과 직각으로 마주 붙이고, 칠판에서 먼 쪽에 칠판을 보는 책상 하나
+  await page.getByRole('button', { name: '모둠 책상' }).click();
+  await page.getByLabel('테이블당 자리').fill('6');
+  await page.getByLabel('앉히는 방법').selectOption('group');
+  assert.equal(await page.locator('.tbl.pod').count(), 4);
+  assert.deepEqual(await page.locator('.tbl.pod').first().locator('.desk').evaluateAll((els) => els.map((e) => [e.classList.contains('end'), e.querySelectorAll('.seat').length])), [[false, 2], [false, 2], [true, 2]]);
+  assert.equal(await page.getByLabel('1번 모둠 이름').inputValue(), '1모둠');
+  const desks = await page.locator('.tbl.pod').first().locator('.desk').evaluateAll((els) =>
+    els.map((e) => [...e.querySelectorAll('.seat')].map((s) => { const r = s.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y)]; })),
+  );
+  // 마주 보는 책상: 두 자리가 위아래 (같은 x), 왼쪽 책상과 오른쪽 책상이 나란히
+  for (const d of desks.slice(0, 2)) assert.ok(d[0][0] === d[1][0] && d[0][1] < d[1][1], JSON.stringify(desks));
+  assert.ok(desks[0][0][0] < desks[1][0][0] && desks[0][0][1] === desks[1][0][1], JSON.stringify(desks));
+  // 뒤 책상: 두 자리가 좌우 (같은 y), 마주 보는 책상보다 칠판에서 멀다
+  assert.ok(desks[2][0][1] === desks[2][1][1] && desks[2][0][0] < desks[2][1][0], JSON.stringify(desks));
+  assert.ok(desks[2][0][1] > desks[0][1][1], JSON.stringify(desks));
+  assert.match(await page.locator('.front').innerText(), /^앞/);
+  // 같은 소속끼리 앉히면 소속마다 색이 다르다
+  assert.equal(await page.getByLabel('소속마다 색으로 표시').isChecked(), true);
+  assert.deepEqual(await page.locator('.legend li').allInnerTexts(), DEPTS.map((d) => `${d} 6`));
+  const colors = await page.locator('.canvas .seat.tint').evaluateAll((els) => els.map((e) => [e.getAttribute('title'), getComputedStyle(e).borderTopColor]));
+  assert.equal(colors.length, 24);
+  assert.equal(new Set(colors.map((c) => c[1])).size, 4);
+  assert.equal(new Set(colors.map((c) => c.join())).size, 4, '같은 소속은 같은 색');
+
+  // 테이블을 끌어서 옮긴다. 새로 고쳐도 그 자리. 오른쪽 끝을 넘기면 배치도가 넓어진다
+  const pod = page.locator('.tbl.pod').nth(1);
+  const spot = () => page.locator('.tbl.pod').nth(1).evaluate((e) => [parseFloat((e as HTMLElement).style.left), parseFloat((e as HTMLElement).style.top)]);
+  const from = (await pod.boundingBox())!;
+  const start = await spot();
+  await page.mouse.move(from.x + 6, from.y + 6);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 46, from.y + 126, { steps: 6 });
+  await page.mouse.up();
+  const to = await spot();
+  assert.ok(Math.abs(to[0] - start[0] - 40) <= 2 && Math.abs(to[1] - start[1] - 120) <= 2, JSON.stringify([start, to]));
+  await pod.locator('.grip').focus();
+  await page.keyboard.press('ArrowRight');
+  assert.deepEqual(await spot(), [to[0] + 10, to[1]]);
+  await page.screenshot({ path: `${SHOTS}/badge-seating-pod.png`, fullPage: true });
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.deepEqual(await spot(), [to[0] + 10, to[1]]);
+  // 전체 화면: 화면에 맞게 키운다
+  await page.getByRole('button', { name: '전체 화면' }).click();
+  await page.locator('.box.full').waitFor();
+  assert.ok((await page.locator('.box.full .title').innerText()).length > 0);
+  await page.waitForFunction(() => document.querySelector('.box.full .canvas')!.getBoundingClientRect().height > innerHeight * 0.5);
+  await page.screenshot({ path: `${SHOTS}/badge-seating-full.png` });
+  await page.getByRole('button', { name: /닫기/ }).click();
+  await page.locator('.box.full').waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '테이블 자리 정돈' }).click();
+  assert.deepEqual(await spot(), start, '정돈하면 제자리로');
+
   await page.getByRole('button', { name: '줄 맞춤' }).click();
-  await page.getByLabel('줄 수').fill('5');
-  await page.getByLabel('한 줄 자리').fill('7');
+  // 줄 맞춤: 2인 책상 × 3열 × 5행, 책상 사이는 통로
+  await page.getByLabel('책상당 자리').fill('2');
+  await page.getByLabel('열 수').fill('3');
+  await page.getByLabel('행 수').fill('5');
   await page.getByLabel('앉히는 방법').selectOption('order');
-  await page.getByRole('button', { name: '다시 배치' }).click();
-  assert.deepEqual(await page.locator('.hall .row').evaluateAll((els) => els.map((e) => e.querySelectorAll('.seat:not(.free)').length)), [7, 7, 7, 3, 0]);
+  assert.deepEqual(await page.locator('.canvas .row').evaluateAll((els) => els.map((e) => e.querySelectorAll('.seat:not(.free)').length)), [6, 6, 6, 6, 0]);
   assert.equal(await page.locator('.results > .head .count').innerText(), '4줄 · 24명');
+  const rowXs = await page.locator('.canvas .row').first().locator('.seat').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().x)));
+  const steps = rowXs.slice(1).map((x, i) => x - rowXs[i]);
+  assert.ok(steps[1] > steps[0] && steps[3] > steps[2] && steps[0] === steps[2], JSON.stringify(steps));
   await page.screenshot({ path: `${SHOTS}/badge-seating-rows.png`, fullPage: true });
   // 명단이 바뀌면 알려 준다
   await page.getByLabel('참가자 명단').press('ControlOrMeta+End');
   await page.getByLabel('참가자 명단').pressSequentially('\n새사람');
   assert.match(await page.locator('.results [role=alert]').innerText(), /자리가 없는 사람 1명: 새사람/);
+  assert.deepEqual(errors, []);
+  await browser.close();
+});
+
+test('좌석표: 명단 없이 모양 미리 보기', async () => {
+  const { browser, page, errors } = await open('/badge');
+  await page.getByRole('button', { name: '좌석표' }).click();
+  assert.equal(await page.locator('.canvas .tbl.round').count(), 3);
+  assert.equal(await page.locator('.canvas .seat.free').count(), 24);
+  assert.match(await page.locator('.results .hint').innerText(), /모양을 미리 봅니다/);
+  await page.getByRole('button', { name: '줄 맞춤' }).click();
+  await page.getByLabel('책상당 자리').fill('1');
+  await page.getByLabel('열 수').fill('5');
+  await page.getByLabel('행 수').fill('3');
+  assert.deepEqual(await page.locator('.canvas .row').evaluateAll((els) => els.map((e) => e.querySelectorAll('.seat.free').length)), [5, 5, 5]);
+  assert.equal(await page.locator('.results > .head .count').innerText(), '3줄 · 0명');
+  // 명단을 넣으면 바로 앉는다
+  await page.getByLabel('참가자 명단').fill('가\n나\n다\n라');
+  assert.equal(await page.locator('.canvas .seat:not(.free)').count(), 4);
+  assert.deepEqual(errors, []);
+  await browser.close();
+});
+
+test('좌석표: 오른쪽 클릭으로 자리 · 책상 · 테이블 막기와 치우기', async () => {
+  const { browser, page, errors } = await open('/badge');
+  await page.getByLabel('참가자 명단').fill(Array.from({ length: 8 }, (_, i) => `사람${String(i + 1).padStart(2, '0')}`).join('\n'));
+  await page.getByRole('button', { name: '좌석표' }).click();
+  await page.getByRole('button', { name: '모둠 책상' }).click();
+  await page.getByLabel('테이블당 자리').fill('6');
+  await page.getByLabel('열 수').fill('2');
+  await page.getByLabel('앉히는 방법').selectOption('order');
+  const seatedCount = () => page.locator('.canvas .seat:not(.free, .closed, .gone)').count();
+  assert.equal(await seatedCount(), 8);
+  const menu = page.getByRole('menu');
+
+  // 자리 하나를 막는다: 앉아 있던 사람은 같은 모둠 빈 자리로
+  await page.getByRole('button', { name: '1모둠 1번 자리: 사람01' }).click({ button: 'right' });
+  assert.match(await menu.innerText(), /1모둠 1번 자리/);
+  await menu.getByRole('menuitem', { name: '이 자리 앉지 못하게' }).click();
+  assert.equal(await menu.count(), 0);
+  await page.getByRole('button', { name: '1모둠 1번 자리: 앉지 못함' }).waitFor();
+  assert.equal(await seatedCount(), 8);
+  assert.equal(await page.locator('.tbl.pod').first().locator('.seat', { hasText: '사람01' }).count(), 1);
+  assert.match(await page.locator('.note.fit').innerText(), /자리 11개/);
+
+  // 책상을 치운다: 자리 둘이 사라지고, 앉아 있던 사람은 다른 자리로
+  await page.getByRole('button', { name: /^1모둠 3번 자리/ }).click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: '이 책상 치우기' }).click();
+  assert.equal(await page.locator('.tbl.pod').first().locator('.seat.gone').count(), 2);
+  assert.equal(await page.locator('.tbl.pod').first().locator('.desk.gone').count(), 1);
+  assert.equal(await seatedCount(), 8);
+  assert.match(await page.locator('.note.fit').innerText(), /자리 9개/);
+
+  // 모둠을 통째로 치운다: 자리가 모자라면 알려 주고, 점선 칸을 눌러 되돌리면 다시 앉는다
+  await page.locator('.tbl.pod').nth(1).locator('.cap .n').click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: '이 모둠 치우기' }).click();
+  assert.equal(await page.locator('.tbl.pod').count(), 1);
+  assert.match(await page.locator('.results [role=alert]').innerText(), /자리가 없는 사람 5명/);
+  await page.getByRole('button', { name: /치운 모둠/ }).click();
+  assert.equal(await page.locator('.tbl.pod').count(), 2);
+  assert.equal(await seatedCount(), 8);
+  assert.equal(await page.locator('.results [role=alert]').count(), 0);
+
+  // 끌어서 막은 자리에 놓을 수 없다
+  const closed = (await page.getByRole('button', { name: '1모둠 1번 자리: 앉지 못함' }).boundingBox())!;
+  const mover = page.locator('.tbl.pod').nth(1).locator('.seat:not(.free)').first();
+  const who = (await mover.innerText()).trim();
+  const mb = (await mover.boundingBox())!;
+  await page.mouse.move(mb.x + mb.width / 2, mb.y + mb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(closed.x + closed.width / 2, closed.y + closed.height / 2, { steps: 6 });
+  await page.mouse.up();
+  assert.equal((await mover.innerText()).trim(), who);
+
+  // 다시 배치해도 막고 치운 것은 그대로, 새로 고쳐도 그대로
+  await page.getByLabel('앉히는 방법').selectOption('random');
+  await page.getByRole('button', { name: '1모둠 1번 자리: 앉지 못함' }).waitFor();
+  assert.equal(await page.locator('.seat.gone').count(), 2);
+  assert.equal(await seatedCount(), 8);
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await page.locator('.seat.gone').count(), 2);
+  await page.screenshot({ path: `${SHOTS}/badge-seating-off.png`, fullPage: true });
+  // Esc 로 메뉴를 닫는다
+  await page.locator('.tbl.pod').first().locator('.seat').first().click({ button: 'right' });
+  await menu.waitFor();
+  await page.keyboard.press('Escape');
+  assert.equal(await menu.count(), 0);
+  // 모두 되돌리기
+  await page.getByRole('button', { name: '막거나 치운 것 모두 되돌리기' }).click();
+  assert.equal(await page.locator('.seat.gone, .seat.closed').count(), 0);
+  assert.match(await page.locator('.note.fit').innerText(), /자리 12개/);
+  // 열 · 자리 수를 바꾸면 막아 둔 것은 비운다
+  await page.locator('.tbl.pod').first().locator('.seat').first().click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: '이 자리 앉지 못하게' }).click();
+  await page.getByLabel('열 수').fill('3');
+  assert.equal(await page.locator('.seat.closed').count(), 0);
   assert.deepEqual(errors, []);
   await browser.close();
 });
@@ -259,8 +446,7 @@ test('이름표 · 좌석표: 좁은 화면', async () => {
   await page.locator('.out').scrollIntoViewIfNeeded();
   await page.screenshot({ path: `${SHOTS}/badge-mobile.png`, fullPage: true });
   await page.getByRole('button', { name: '좌석표' }).click();
-  await page.getByRole('button', { name: '자리 배치' }).click();
-  assert.equal(await page.locator('.plan .round').count(), 3);
+  assert.equal(await page.locator('.tbl.round').count(), 3);
   assert.ok(await page.evaluate(() => document.querySelector('.page')!.scrollWidth <= 390));
   await page.screenshot({ path: `${SHOTS}/badge-seating-mobile.png`, fullPage: true });
   assert.deepEqual(errors, []);

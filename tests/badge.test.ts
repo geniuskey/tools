@@ -5,7 +5,7 @@ import { parseGroups, type Rand } from '../src/lib/team/core';
 import {
   PAPERS, PRESETS, DEFAULT_CUSTOM, assignSeats, badgeLayout, cellRects, checkGrid, customGrid, fillTemplate, fitInfo, fitName, lookup, lookupText,
   nameSpacing, paginate, perPage, presetGrid, presetName, seatIndex, seated, seatingCsv, seatingText, suggestTables, swapSeats, tableSizes, tentGrid,
-  toTables, NAME_LINE, type Measure,
+  toTables, NAME_LINE, type Measure, type Offs, fillSizes, gridPlace, openSlots, reshape, groupHue, planSize, podPlan, seatGroups, tableBox, tableName,
 } from '../src/lib/badge/core';
 
 /** 테스트마다 같은 결과가 나오는 난수 */
@@ -304,4 +304,117 @@ test('예시 명단으로 끝까지', () => {
   const tables = toTables(r, people, 8, 'round');
   assert.equal(lookup(tables).length, 97);
   assert.equal(seatIndex(tables).size, 97);
+});
+
+test('배치도: 모둠 책상 — 2인 책상을 칠판과 직각으로 마주 붙이고 뒤에 하나', () => {
+  // 여섯 명 = 마주 보는 책상 둘 + 뒤 책상 하나
+  assert.deepEqual(podPlan(6), { desks: 1, row: 2, side: 2 });
+  assert.deepEqual(podPlan(4), { desks: 1, row: 2, side: 0 });
+  assert.deepEqual(podPlan(2), { desks: 1, row: 1, side: 0 });
+  assert.deepEqual(podPlan(5), { desks: 1, row: 2, side: 1 });
+  assert.deepEqual(podPlan(8), { desks: 2, row: 3, side: 2 });
+  // 자리 수는 늘 맞는다
+  for (let n = 1; n <= 12; n++) {
+    const p = podPlan(n);
+    assert.ok(p.row * 2 + p.side >= n && p.row * 2 + p.side <= n + 1, `${n}명`);
+  }
+  assert.equal(tableName(2, 'pod'), '3모둠');
+  // 뒤 책상이 붙으면 그만큼 길어지고, 폭은 마주 보는 두 줄 그대로
+  assert.ok(tableBox('pod', 6).h > tableBox('pod', 4).h);
+  assert.equal(tableBox('pod', 6).w, tableBox('pod', 4).w);
+  // 모둠이 커지면 앞뒤로 길어진다
+  assert.ok(tableBox('pod', 8).h > tableBox('pod', 6).h);
+  assert.equal(tableBox('pod', 8).w, tableBox('pod', 6).w);
+});
+
+test('배치도: 테이블 크기와 늘어놓기', () => {
+  // 긴 탁자를 세로로 돌리면 좁고 길어진다
+  const h = tableBox('long', 10);
+  const v = tableBox('long', 10, true);
+  assert.ok(h.w > h.h && v.h > h.h && v.w < h.w, JSON.stringify([h, v]));
+  assert.ok(tableBox('round', 12).w > tableBox('round', 6).w);
+  // 열 · 행 격자: 3열이면 넷째부터 다음 행. 열 너비 · 행 높이는 가장 큰 테이블에 맞추고 칸 안 가운데
+  const boxes = [{ w: 200, h: 100 }, { w: 160, h: 80 }, { w: 200, h: 100 }, { w: 200, h: 120 }, { w: 200, h: 100 }];
+  const g = gridPlace(boxes, 3, 0, 20, 30, 50);
+  assert.equal(g.w, 640);
+  assert.deepEqual(g.at.map((p) => p.x), [0, 240, 440, 0, 220]);
+  assert.deepEqual(g.at.map((p) => p.y), [50, 60, 50, 180, 190]);
+  for (let i = 0; i < g.at.length; i++) for (let j = i + 1; j < g.at.length; j++) assert.ok(g.at[i].y !== g.at[j].y || Math.abs(g.at[i].x - g.at[j].x) >= 160, '겹치지 않는다');
+  assert.deepEqual(planSize(boxes, g.at, g.w), { w: 640, h: 300 });
+  // 주어진 너비보다 좁으면 가운데로, 열이 테이블보다 많으면 테이블 수만큼
+  assert.deepEqual(gridPlace([{ w: 100, h: 50 }], 4, 300), { at: [{ x: 100, y: 0 }], w: 300 });
+  assert.equal(gridPlace([{ w: 100, h: 50 }, { w: 100, h: 50 }], 9, 0, 20).w, 220);
+});
+
+test('배치도: 소속 색', () => {
+  const seat = (name: string, info: string) => ({ name, info, key: name });
+  const tables = [
+    { name: 'a', seats: [seat('가', '개발 · 팀장'), seat('나', '디자인'), null] },
+    { name: 'b', seats: [seat('다', '개발'), seat('라', '')] },
+  ];
+  assert.deepEqual(seatGroups(tables), [{ name: '개발', count: 2 }, { name: '디자인', count: 1 }]);
+  const hues = Array.from({ length: 20 }, (_, i) => groupHue(i));
+  assert.equal(new Set(hues.slice(0, 12)).size, 12);
+  assert.ok(hues.every((h) => h >= 0 && h < 360));
+});
+
+test('좌석: 테이블마다 앉을 수 있는 자리가 다를 때', () => {
+  // 고르게: 자리가 남는 테이블끼리 차이는 1명, 막힌 만큼은 넘치지 않는다
+  assert.deepEqual(fillSizes(10, [4, 2, 4]), [4, 2, 4]);
+  assert.deepEqual(fillSizes(7, [4, 2, 4]), [3, 2, 2]);
+  assert.deepEqual(fillSizes(7, [4, 0, 4]), [4, 0, 3]);
+  assert.deepEqual(fillSizes(7, [2, 3, 4], true), [2, 3, 2]);
+  assert.deepEqual(fillSizes(20, [2, 3]), [2, 3]);
+  for (const method of ['random', 'mix', 'order', 'group'] as const) {
+    const people = roster(12);
+    const r = assignSeats(people, { tables: 3, seats: 6, caps: [6, 2, 6], method, rand: seeded(5) });
+    assert.ok(r.tables[1].length <= 2, method);
+    assert.equal(r.tables.flat().length, 12, method);
+    // 줄 맞춤: 앞줄부터 앉을 수 있는 만큼만
+    const f = assignSeats(people, { tables: 4, seats: 6, caps: [3, 6, 6, 6], method, front: true, rand: seeded(5) });
+    assert.ok(f.tables[0].length <= 3 && f.tables[3].length === 0, `${method} ${JSON.stringify(f.tables.map((t) => t.length))}`);
+  }
+});
+
+test('좌석: 막은 자리 · 치운 테이블', () => {
+  const people = roster(6);
+  const offs: Offs = { '1': 'removed', '0:0': 'closed', '2:1': 'gone' };
+  const g = openSlots(offs, 3, 3);
+  assert.deepEqual(g.slots, [0, 2]);
+  assert.deepEqual(g.off, [['closed', null, null], [null, 'gone', null]]);
+  const r = assignSeats(people, { tables: 2, seats: 3, caps: [2, 2], method: 'order' });
+  const tables = toTables(r, people, 3, 'round', [], g);
+  // 막은 자리는 건너뛰어 앉히고, 이름은 남은 테이블 순서대로
+  assert.deepEqual(tables.map((t) => t.seats.map((s) => s?.name ?? null)), [[null, people[0].name, people[1].name], [people[2].name, null, people[3].name]]);
+  assert.deepEqual(tables.map((t) => [t.name, t.slot]), [['1번 테이블', 0], ['2번 테이블', 2]]);
+  // 막은 자리로는 맞바꾸지 않는다
+  assert.deepEqual(swapSeats(tables, [0, 1], [0, 0])[0].seats, tables[0].seats);
+  assert.equal(swapSeats(tables, [0, 1], [1, 0])[1].slot, 2, '격자 칸은 그대로');
+
+  // 앉아 있는 자리를 막으면 그 사람만 같은 테이블 빈 자리로, 없으면 사람이 적은 테이블로
+  const full = toTables(assignSeats(roster(5), { tables: 3, seats: 2, method: 'order', front: true }), roster(5), 2, 'pod');
+  full[1].name = '창가';
+  const a = reshape(full, { '0:1': 'closed' }, 3, 2, 'pod');
+  assert.deepEqual(a.tables.map((t) => t.seats.map((s) => s?.name ?? null)), [['사람01', null], ['사람03', '사람04'], ['사람05', '사람02']]);
+  assert.deepEqual(a.left, []);
+  // 테이블을 치우면 앉은 사람은 다른 데로, 자리가 없으면 남는다. 기본 이름은 다시 매기고 고친 이름은 그대로
+  const b = reshape(full, { '0': 'removed' }, 3, 2, 'pod');
+  assert.deepEqual(b.tables.map((t) => [t.name, t.slot]), [['창가', 1], ['2모둠', 2]]);
+  assert.deepEqual(b.tables.map((t) => t.seats.map((s) => s?.name ?? null)), [['사람03', '사람04'], ['사람05', '사람01']]);
+  assert.deepEqual(b.left.map((s) => s.name), ['사람02']);
+  // 되돌리면 빈 테이블이 제 칸에 다시 생긴다
+  const c = reshape(b.tables, {}, 3, 2, 'pod');
+  // 자리가 없던 사람은 빈 자리가 생기면 앉는다
+  const d = reshape(b.tables, {}, 3, 2, 'pod', b.left);
+  assert.deepEqual(d.tables[0].seats.map((s) => s?.name ?? null), ['사람02', null]);
+  assert.deepEqual(d.left, []);
+  assert.deepEqual(c.tables.map((t) => [t.name, t.slot, t.seats.filter(Boolean).length]), [['1모둠', 0, 0], ['창가', 1, 2], ['3모둠', 2, 2]]);
+});
+
+test('배치도: 치운 칸은 비워 두고 격자는 그대로', () => {
+  const boxes = [{ w: 100, h: 50 }, { w: 100, h: 50 }, { w: 100, h: 50 }];
+  // 2열, 칸 1을 치움 → 0, 2, 3 칸
+  const g = gridPlace(boxes, 2, 0, 20, 10, 0, [0, 2, 3]);
+  assert.deepEqual(g.at, [{ x: 0, y: 0 }, { x: 0, y: 60 }, { x: 120, y: 60 }]);
+  assert.equal(g.w, 220);
 });
