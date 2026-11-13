@@ -1,10 +1,9 @@
-export type ToolGroupId = 'work' | 'media' | 'share' | 'event';
+export type ToolGroupId = 'work' | 'media' | 'event';
 
 /** 업무에 가까운 것부터. 첫 화면과 서랍이 이 순서로 묶어 보여 준다. */
 export const toolGroups: { id: ToolGroupId; name: string }[] = [
   { id: 'work', name: '문서 · 데이터' },
   { id: 'media', name: '이미지 · 화면' },
-  { id: 'share', name: '공유' },
   { id: 'event', name: '행사 · 모임' },
 ];
 
@@ -73,6 +72,18 @@ export const tools: ToolInfo[] = [
     keywords: 'calculator calc 계산 공학 프로그래머 hex bin 진법',
   },
   {
+    id: 'unit',
+    group: 'work',
+    href: '/unit',
+    name: '단위 변환',
+    short: '평 · 근 · 데이터 · 인쇄 · 온도',
+    icon: 'M3.5 16.5L16.5 3.5l4 4-13 13zM7 13l1.8 1.8M9.5 10.5l1.2 1.2M12 8l1.8 1.8M14.5 5.5l1.2 1.2',
+    tagline: '32평이 몇 ㎡인지, 1GB 가 몇 MiB 인지. 적은 그대로 알아듣고 정확한 10진수로 바꿉니다.',
+    color: 'var(--c-unit)',
+    features: ['"32평" · "5ft 11in" 처럼 적은 그대로', '평 · 근 · 돈 · 자 같은 우리 단위', '데이터 크기 KB / KiB · 전송 시간', '인쇄 · 화면 px ↔ mm ↔ pt (DPI)'],
+    keywords: 'unit convert conversion 단위 변환 환산 길이 넓이 면적 무게 부피 온도 속도 평 제곱미터 근 돈 냥 자 인치 피트 파운드 마일 섭씨 화씨 kb mb gb kib mib 데이터 px pt dpi mm 연비',
+  },
+  {
     id: 'date',
     group: 'work',
     href: '/date',
@@ -83,6 +94,18 @@ export const tools: ToolInfo[] = [
     color: 'var(--c-date)',
     features: ['두 날짜 사이 · 며칠 뒤 (근무일 기준)', '공휴일 · 대체공휴일 · 음력 명절을 직접 계산', '시간대가 다른 사람과 겹치는 근무 시간', '음력 ↔ 양력 · 연차 붙이기 좋은 날'],
     keywords: 'date day calendar business workday holiday timezone lunar dday 날짜 계산 디데이 근무일 영업일 공휴일 대체공휴일 연휴 시간대 시차 음력 양력 설날 추석 연차 달력',
+  },
+  {
+    id: 'cron',
+    group: 'work',
+    href: '/cron',
+    name: 'cron 풀이',
+    short: 'cron 식 풀이 · 다음 실행 시각',
+    icon: 'M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4v3.5H16M12 8.5V12l2.5 1.5',
+    tagline: '0 9 * * 1-5 를 "평일 오전 9시" 로. 다음에 언제 돌지, 공휴일에 걸리는지까지 보여 줍니다.',
+    color: 'var(--c-cron)',
+    features: ['cron 식을 한 칸씩 우리말로', '다음 실행 시각 · 시간대 · 공휴일 표시', 'Quartz · Spring · AWS 형식 (초, ?, L, W, #)', '말로 고르면 식을 만들어 주는 빌더'],
+    keywords: 'cron crontab cronjob schedule quartz spring aws eventbridge github actions kubernetes 크론 크론탭 스케줄 예약 반복 일정 주기 다음 실행',
   },
   {
     id: 'encode',
@@ -133,8 +156,20 @@ export const tools: ToolInfo[] = [
     keywords: 'screen record recorder gif video 화면 녹화 캡처 영상 움짤 변환 webm mp4',
   },
   {
+    id: 'color',
+    group: 'media',
+    href: '/color',
+    name: '색상 · 대비',
+    short: '색 변환 · 대비 검사 · 팔레트',
+    icon: 'M12 3.5c-4.7 0-8.5 3.6-8.5 8.1 0 4.3 3.5 8.4 7.6 8.4 1.2 0 1.9-.8 1.9-1.8 0-1.4-1.1-1.8-1.1-3 0-1 .8-1.7 1.8-1.7h2.2c2.6 0 4.6-2 4.6-4.4 0-3.1-3.8-5.6-8.5-5.6zM7.5 12h.01M9.5 7.8h.01M14.5 7.5h.01',
+    tagline: '글자와 배경이 잘 읽히는지 대비를 재고, 기준을 넘는 가장 가까운 색을 찾아 줍니다.',
+    color: 'var(--c-color)',
+    features: ['HEX · RGB · HSL · OKLCH 서로 변환', '대비 검사 (WCAG AA · AAA) · 통과하는 색 제안', '밝기 단계 팔레트 · CSS 변수로 내보내기', '화면 · 사진에서 색 따오기 · 색각 이상 미리보기'],
+    keywords: 'color colour picker contrast wcag a11y palette hex rgb hsl oklch eyedropper 색 색상 색깔 대비 명도 접근성 팔레트 스포이드 색각 색맹 테마 tailwind css',
+  },
+  {
     id: 'qr',
-    group: 'share',
+    group: 'media',
     href: '/qr',
     name: 'QR 코드',
     short: '링크 · Wi-Fi · 연락처 · 로고',

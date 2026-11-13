@@ -11,7 +11,7 @@
 
 <svelte:head>
   <title>tools.euiyun.com — 제대로 만든 웹 도구</title>
-  <meta name="description" content="데이터 뷰어, 비교, 텍스트(정규식 · 글자 수), 계산기, 날짜 계산기(근무일 · 공휴일), 인코딩 · 해시, 이미지 편집기, 이미지 일괄 변환, 화면 녹화, QR 코드, 행사 타이머, 조 편성 · 사다리, 이름표 · 좌석표, 추첨기. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
+  <meta name="description" content="데이터 뷰어, 비교, 텍스트(정규식 · 글자 수), 계산기, 단위 변환, 날짜 계산기(근무일 · 공휴일), cron 풀이, 인코딩 · 해시, 이미지 편집기, 이미지 일괄 변환, 화면 녹화, 색상 · 대비, QR 코드, 행사 타이머, 조 편성 · 사다리, 이름표 · 좌석표, 추첨기. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
 </svelte:head>
 
 <div class="wrap">
@@ -181,6 +181,40 @@
                   <em style:--a="{k * 60 - 90}deg">{n}</em>
                 {/each}
               </div>
+            </div>
+          {:else if t.id === 'color'}
+            <div class="pv-color">
+              <div class="pv-pair">
+                <span class="pv-aa">Aa</span>
+                <div>
+                  <strong>5.25<small> : 1</small></strong>
+                  <span><b>✓</b> AA 본문 <b class="no">✕</b> AAA</span>
+                </div>
+              </div>
+              <div class="pv-scale">
+                {#each ['#fef2f4', '#fce2e6', '#f8cbd3', '#f1a8b6', '#e97591', '#de4372', '#c2255c', '#a71e4e', '#881c40', '#6f2138', '#481423'] as c (c)}<i style:background={c}></i>{/each}
+              </div>
+            </div>
+          {:else if t.id === 'unit'}
+            <div class="pv-unit">
+              <span class="pv-ask">32평<i></i></span>
+              <strong>105.785 <small>m²</small></strong>
+              <ul>
+                {#each [['ft²', '1,138.66'], ['에이커', '0.0261'], ['단보', '0.1067']] as [u, v] (u)}<li><span>{u}</span><b>{v}</b></li>{/each}
+              </ul>
+            </div>
+          {:else if t.id === 'cron'}
+            <div class="pv-cron">
+              <div class="pv-toks">
+                {#each [['0', '분'], ['9', '시'], ['*', '일'], ['*', '월'], ['1-5', '요일']] as [v, k], i (i)}
+                  <span class:on={i === 4}><b>{v}</b><i>{k}</i></span>
+                {/each}
+              </div>
+              <strong>평일 오전 9시</strong>
+              <ol>
+                <li><span>11월 16일 (월) 9:00</span><em>2일 뒤</em></li>
+                <li><span>11월 17일 (화) 9:00</span><em>3일 뒤</em></li>
+              </ol>
             </div>
           {:else if t.id === 'raffle'}
             <div class="pv-raffle">
@@ -1069,6 +1103,192 @@
     font-size: 11px;
     opacity: 0.6;
     position: relative;
+  }
+
+  /* 미리보기: 색상 · 대비 */
+  .pv-color {
+    position: absolute;
+    inset: 20px 24px auto;
+    display: grid;
+    gap: 12px;
+  }
+  .pv-pair {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+  }
+  .pv-aa {
+    display: grid;
+    place-items: center;
+    width: 62px;
+    height: 62px;
+    border-radius: 10px;
+    background: #fff4f6;
+    color: #c2255c;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .pv-pair div {
+    display: grid;
+  }
+  .pv-pair strong {
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+  }
+  .pv-pair small {
+    font-size: 15px;
+    color: var(--muted);
+  }
+  .pv-pair div span {
+    font-size: 11.5px;
+    color: var(--muted);
+  }
+  .pv-pair b {
+    color: var(--ok);
+  }
+  .pv-pair b.no {
+    margin-left: 4px;
+    color: var(--bad);
+  }
+  .pv-scale {
+    display: grid;
+    grid-template-columns: repeat(11, 1fr);
+    height: 30px;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .pv-scale i:nth-child(7) {
+    box-shadow: inset 0 0 0 2px #fff;
+  }
+
+  /* 미리보기: 단위 변환 */
+  .pv-unit {
+    position: absolute;
+    inset: 16px 26px auto;
+    display: grid;
+    justify-items: start;
+    gap: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pv-ask {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    padding: 5px 10px;
+    border-radius: 9px;
+    background: var(--surface);
+    border: 1.5px solid var(--app);
+    font-size: 14px;
+    font-weight: 650;
+    box-shadow: var(--shadow);
+  }
+  .pv-ask i {
+    width: 1.5px;
+    height: 15px;
+    margin-left: 2px;
+    background: var(--app);
+  }
+  .pv-unit strong {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.2;
+  }
+  .pv-unit strong small {
+    font-size: 16px;
+    color: var(--app);
+  }
+  .pv-unit ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    display: grid;
+    gap: 2px;
+  }
+  .pv-unit li {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--surface);
+    font-size: 11.5px;
+  }
+  .pv-unit li span {
+    color: var(--muted);
+  }
+
+  /* 미리보기: cron 풀이 */
+  .pv-cron {
+    position: absolute;
+    inset: 16px 26px auto;
+    display: grid;
+    gap: 7px;
+  }
+  .pv-toks {
+    display: flex;
+    gap: 4px;
+  }
+  .pv-toks span {
+    display: grid;
+    justify-items: center;
+    min-width: 34px;
+    padding: 2px 7px 1px;
+    border-radius: 7px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+  }
+  .pv-toks span.on {
+    border-color: var(--app);
+    box-shadow: inset 0 0 0 1px var(--app);
+  }
+  .pv-toks b {
+    font-size: 13px;
+  }
+  .pv-toks i {
+    font-family: var(--font);
+    font-style: normal;
+    font-size: 9.5px;
+    color: var(--muted);
+  }
+  .pv-cron strong {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    color: var(--app);
+  }
+  .pv-cron ol {
+    list-style: none;
+    margin: 0;
+    padding: 4px 10px;
+    border-radius: 9px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pv-cron li {
+    display: flex;
+    justify-content: space-between;
+    line-height: 1.9;
+  }
+  .pv-cron li + li {
+    border-top: 1px solid var(--border);
+  }
+  .pv-cron em {
+    font-style: normal;
+    color: var(--muted);
   }
 
   .principles {

@@ -35,6 +35,9 @@
   --c-date: #099268;
   --c-encode: #5f6b7a;
   --c-badge: #9c5a2b;
+  --c-unit: #d97706;
+  --c-cron: #4263eb;
+  --c-color: #c2255c;
   --app: var(--accent);
   --soft-mix: 11%;
   --line-mix: 40%;
@@ -74,6 +77,9 @@
   --c-date: #38d9a9;
   --c-encode: #b3bdc9;
   --c-badge: #e3a877;
+  --c-unit: #ffb454;
+  --c-cron: #a5b4fc;
+  --c-color: #faa2c1;
   --soft-mix: 20%;
   --line-mix: 55%;
   --on-app: #14151a;
@@ -111,9 +117,9 @@
     --c-date: #38d9a9;
     --c-encode: #b3bdc9;
     --c-badge: #e3a877;
-  --c-date: #38d9a9;
-  --c-encode: #b3bdc9;
-  --c-badge: #e3a877;
+    --c-unit: #ffb454;
+    --c-cron: #a5b4fc;
+    --c-color: #faa2c1;
     --soft-mix: 20%;
     --line-mix: 55%;
     --on-app: #14151a;
