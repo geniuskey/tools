@@ -102,6 +102,17 @@ export const tools: ToolInfo[] = [
     keywords: 'json csv tsv viewer data table tree 데이터 뷰어 표 트리 변환 포맷 정렬 jsonl yaml yml toml 컨버터 convert',
   },
   {
+    id: 'text',
+    href: '/text',
+    name: '텍스트',
+    short: '정규식 · 줄 정리 · 글자 수',
+    icon: 'M5 6h14M5 10h9M5 14h14M5 18h6M17.5 16.5l3 3M15 17.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0',
+    tagline: '정규식을 우리말로 풀어 주고, 줄을 정리하고, 글자 수를 셉니다.',
+    color: 'var(--c-text)',
+    features: ['정규식 시험 · 한 조각씩 풀이', '바꾸기 미리보기 · 묶음을 표로 복사', '줄 정렬 · 겹치는 줄 지우기 · 잇기', '글자 수 · 바이트 · 원고지 장수'],
+    keywords: 'text regex regexp 정규식 정규표현식 텍스트 글자 수 세기 바이트 줄 정렬 중복 제거 대소문자 원고지 자소서 치환',
+  },
+  {
     id: 'qr',
     href: '/qr',
     name: 'QR 코드',

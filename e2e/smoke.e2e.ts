@@ -997,6 +997,101 @@ test('조 편성 · 사다리', async () => {
   await browser.close();
 });
 
+test('텍스트', async () => {
+  const { browser, page, errors } = await open('/text');
+  const expr = page.getByLabel('정규식', { exact: true });
+  const subject = page.getByLabel('시험할 글');
+  const state = page.locator('.state');
+  // 처음에는 날짜 예시: 세 곳이 일치하고 글 위에 표시된다
+  await page.waitForFunction(() => /3곳 일치/.test(document.querySelector('.state')?.textContent ?? ''));
+  assert.deepEqual(await page.locator('.cm-hit').allInnerTexts(), ['2026-11-13', '2026.12.1', '2027/1/15']);
+  assert.match(await page.locator('.explain').innerText(), /묶음 1 ‘year’ 시작/);
+  await page.screenshot({ path: `${SHOTS}/text-regex.png` });
+  // 일치 목록: 묶음 이름과 값, 누르면 그 자리로
+  await page.getByRole('tab', { name: /^일치/ }).click();
+  assert.match(await page.locator('.matches li').nth(1).innerText(), /2026\.12\.1\s+1 · year\s*2026\s+2 · month\s*12\s+3 · day\s*1/);
+  await page.locator('.matches li').nth(2).locator('button').click();
+  assert.equal(await page.locator('.cm-hit.cm-cur').innerText(), '2027/1/15');
+  await page.getByRole('button', { name: '묶음까지 표로 복사' }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '2026-11-13\t2026\t11\t13\n2026.12.1\t2026\t12\t1\n2027/1/15\t2027\t1\t15');
+  // 바꾸기
+  await page.getByRole('tab', { name: '바꾸기' }).click();
+  await page.waitForFunction(() => (document.querySelector('textarea[aria-label="바꾼 결과"]') as HTMLTextAreaElement | null)?.value.includes('년'));
+  assert.equal(await page.getByLabel('바꾼 결과').inputValue(), '시작 2026년 11월 13일, 마감 2026년 12월 1일, 발표 2027년 1월 15일');
+  await page.screenshot({ path: `${SHOTS}/text-replace.png` });
+  // g 를 끄면 첫 번째만
+  await page.getByRole('group', { name: '옵션' }).getByRole('button', { name: /모두 찾기/ }).click();
+  await page.waitForFunction(() => /1곳 일치/.test(document.querySelector('.state')?.textContent ?? ''));
+  assert.match(await state.innerText(), /첫 번째만/);
+  assert.equal(await page.getByLabel('바꾼 결과').inputValue(), '시작 2026년 11월 13일, 마감 2026.12.1, 발표 2027/1/15');
+  await page.getByRole('group', { name: '옵션' }).getByRole('button', { name: /모두 찾기/ }).click();
+  // 틀린 식은 이유를 우리말로
+  await expr.fill('(\\d+');
+  assert.match(await state.innerText(), /괄호 \( 를 닫지 않았습니다/);
+  assert.equal(await page.locator('.cm-hit').count(), 0);
+  // 끝나지 않는 식은 끊고, 화면은 계속 움직인다
+  await expr.fill('^(a+)+$');
+  await subject.fill('a'.repeat(40) + '!');
+  await page.waitForFunction(() => /너무 오래 걸려 멈췄습니다/.test(document.querySelector('.state')?.textContent ?? ''), null, { timeout: 8000 });
+  await expr.fill('a{3}');
+  await page.waitForFunction(() => /13곳 일치/.test(document.querySelector('.state')?.textContent ?? ''));
+  // 글을 고치면 바로 다시 찾는다
+  await subject.click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.type(' aaa');
+  await page.waitForFunction(() => /14곳 일치/.test(document.querySelector('.state')?.textContent ?? ''));
+  // 모음에서 고르면 식과 예시가 함께 들어온다
+  await page.getByRole('tab', { name: '모음' }).click();
+  await page.locator('.presets button', { hasText: '휴대폰 번호' }).click();
+  await page.waitForFunction(() => /3곳 일치/.test(document.querySelector('.state')?.textContent ?? ''));
+  assert.deepEqual(await page.locator('.cm-hit').allInnerTexts(), ['010-1234-5678', '01098765432', '011 234 5678']);
+  assert.match(await page.locator('.explain').innerText(), /다음 중 하나: 0, 1, 6, 7, 8, 9/);
+
+  // 줄 정리 · 글자 수
+  await page.getByRole('button', { name: '줄 정리 · 글자 수' }).click();
+  const area = page.getByLabel('정리할 글');
+  await area.fill('바나나\n  사과 \n바나나\n\n포도\n사과');
+  const stat = async (name: string) => page.locator('.stats div', { hasText: name }).locator('dd').innerText();
+  assert.deepEqual([await stat('글자'), await stat('공백 빼고'), await stat('줄'), await stat('바이트 (한글 2)'), await stat('바이트 (UTF-8)')], ['20', '12', '6', '32', '44']);
+  await page.getByRole('button', { name: '앞뒤 공백' }).click();
+  await page.getByRole('button', { name: '겹치는 줄' }).click();
+  assert.equal(await page.locator('.note').innerText(), '겹치는 2줄을 지웠습니다');
+  await page.getByRole('button', { name: '빈 줄', exact: true }).click();
+  await page.getByRole('button', { name: '가나다순' }).click();
+  assert.equal(await area.inputValue(), '바나나\n사과\n포도');
+  await page.getByRole('button', { name: '줄마다 붙이기' }).click();
+  await page.getByRole('button', { name: '한 줄로 잇기' }).click();
+  assert.equal(await area.inputValue(), "'바나나', '사과', '포도'");
+  await page.screenshot({ path: `${SHOTS}/text-lines.png` });
+  // 되돌리기 · 다시
+  await page.getByRole('button', { name: '되돌리기' }).click();
+  await page.getByRole('button', { name: '되돌리기' }).click();
+  assert.equal(await area.inputValue(), '바나나\n사과\n포도');
+  await page.getByRole('button', { name: '다시', exact: true }).click();
+  assert.equal(await area.inputValue(), "'바나나'\n'사과'\n'포도'");
+  await page.getByRole('button', { name: '되돌리기' }).click();
+  await page.getByLabel('구분자').fill('\\t');
+  await page.getByRole('button', { name: '한 줄로 잇기' }).click();
+  assert.equal(await area.inputValue(), '바나나\t사과\t포도');
+  await page.getByRole('button', { name: '줄로 나누기' }).click();
+  assert.equal(await area.inputValue(), '바나나\n사과\n포도');
+  // 고른 부분만 세기
+  await area.focus();
+  await page.keyboard.press('ControlOrMeta+a');
+  assert.equal(await stat('고른 부분'), '9자');
+  // 새로 고쳐도 남는다
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await page.getByLabel('정리할 글').inputValue(), '바나나\n사과\n포도');
+  await page.getByRole('button', { name: '정규식', exact: true }).click();
+  await page.waitForFunction(() => /3곳 일치/.test(document.querySelector('.state')?.textContent ?? ''));
+
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: `${SHOTS}/text-mobile.png` });
+  assert.deepEqual(errors, []);
+  await browser.close();
+});
+
 test('오프라인', async () => {
   const { browser, page } = await open('/');
   await page.evaluate(() => navigator.serviceWorker.ready);

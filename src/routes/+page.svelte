@@ -11,7 +11,7 @@
 
 <svelte:head>
   <title>tools.euiyun.com — 제대로 만든 웹 도구</title>
-  <meta name="description" content="계산기, 이미지 편집기, 이미지 일괄 변환, 추첨기, 조 편성 · 사다리, 비교, 화면 녹화, 데이터 뷰어, QR 코드, 행사 타이머. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
+  <meta name="description" content="계산기, 이미지 편집기, 이미지 일괄 변환, 추첨기, 조 편성 · 사다리, 비교, 화면 녹화, 데이터 뷰어, 텍스트(정규식 · 글자 수), QR 코드, 행사 타이머. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
 </svelte:head>
 
 <div class="wrap">
@@ -131,6 +131,12 @@
                   <section><b>{name}</b>{#each members as m (m)}<span>{m}</span>{/each}</section>
                 {/each}
               </div>
+            </div>
+          {:else if t.id === 'text'}
+            <div class="pv-text">
+              <code class="pv-re"><i>/</i>01\d-<b>(\d{'{'}4{'}'})</b>-\d{'{'}4{'}'}<i>/g</i></code>
+              <p>김하늘 <mark>010-1234-5678</mark><br />이서연 <mark>011-9876-5432</mark><br />박민준 02-123-4567</p>
+              <span><b>\d{'{'}4{'}'}</b> 숫자 하나 — 정확히 4번</span>
             </div>
           {:else if t.id === 'raffle'}
             <div class="pv-raffle">
@@ -583,6 +589,58 @@
     padding: 3px 0;
     background: var(--app);
     color: var(--on-app);
+  }
+
+  /* 미리보기: 텍스트 */
+  .pv-text {
+    position: absolute;
+    inset: 16px 26px auto;
+    display: grid;
+    gap: 7px;
+    font-size: 12px;
+  }
+  .pv-re {
+    padding: 6px 10px;
+    border-radius: 9px;
+    background: var(--surface);
+    border: 1.5px solid var(--app);
+    font-family: var(--mono);
+    font-size: 12.5px;
+    box-shadow: var(--shadow);
+  }
+  .pv-re i {
+    font-style: normal;
+    color: var(--faint);
+  }
+  .pv-re b {
+    color: var(--app);
+  }
+  .pv-text p {
+    padding: 6px 10px;
+    border-radius: 9px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.7;
+  }
+  .pv-text mark {
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--app) 26%, transparent);
+    color: inherit;
+  }
+  .pv-text span {
+    justify-self: start;
+    padding: 2px 9px;
+    border-radius: 99px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .pv-text span b {
+    font-family: var(--mono);
+    color: var(--text);
   }
 
   /* 미리보기: 데이터 */
