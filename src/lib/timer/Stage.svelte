@@ -58,7 +58,8 @@
     });
     ro.observe(canvas);
 
-    const target = () => Math.min(1, Math.max(0, progress));
+    // 1 을 넘으면 시간을 넘긴 것. 넘긴 만큼은 따로 넘겨준다 (모래는 계속 쌓인다)
+    const target = () => Math.min(4, Math.max(0, progress));
     // 처음 값만 읽는다. 여기서 값을 따라가면 초마다 배경이 처음부터 다시 그려진다
     const first = untrack(() => ({ running, tone: toneOf(scene, phase), p: target() }));
     let t = Math.random() * 100;
@@ -81,7 +82,7 @@
       }
       t += dt * speed;
       ctx!.clearRect(0, 0, W, H);
-      paint!({ ctx: ctx!, W, H, t, dt: dt * speed, p, energy, top, deep, running, phase, still });
+      paint!({ ctx: ctx!, W, H, t, dt: dt * speed, p: Math.min(1, p), more: Math.max(0, p - 1), energy, top, deep, running, phase, still });
     }
 
     if (still) {

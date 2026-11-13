@@ -15,6 +15,8 @@ export interface Frame {
   dt: number;
   /** 0..1 지난 비율 */
   p: number;
+  /** 시간을 넘긴 만큼 (순서 길이에 대한 비율). 넘기지 않았으면 0 */
+  more: number;
   /** 움직임의 세기: 멈춤 0.35 · 보통 1 · 임박 1.6 · 초과 2.4 */
   energy: number;
   top: RGB;
@@ -197,11 +199,13 @@ function sand(): Draw {
   let count = 0; // 지금까지 내린 알
   let acc = 0;
   let rebuilt = -1;
+  let moved = 0;
   let rate = 0; // 한 장 (1/60초) 에 늘어나는 알 수 (부드럽게)
   let last = 0;
 
   // 줄기가 떨어지는 자리 (칸), 칸마다 가장 가까운 줄기까지의 거리, 줄기마다 봉우리의 높이 (y)
   let spouts: number[] = [];
+  let home: number[] = []; // 처음 뽑은 자리. 시간을 넘기면 줄기가 골짜기로 옮겨 가는데, 산을 다시 그릴 때는 여기로 돌아온다
   let far = new Float32Array(0);
   let tops: number[] = [];
   let carry: number[] = []; // 줄기마다 아직 못 내보낸 알의 소수점 아래
@@ -212,6 +216,7 @@ function sand(): Draw {
   let bounds: number[] = [];
   let band = 0;
   let full = 0; // 다 쌓였을 때의 알 수
+  let limit = 0; // 시간을 넘겨 계속 쌓을 때의 한도: 봉우리가 화면 위에 닿을 때까지
 
   // 쌓인 모양은 줄기마다 기울기 1:2 의 산이 겹친 것. 봉우리 높이가 h 일 때 x 칸에 쌓인 높이와 전체 알 수
   const column = (x: number, h: number) => Math.max(0, Math.min(gh, Math.round(h - far[x] / 2)));
@@ -241,10 +246,10 @@ function sand(): Draw {
     [184, 114, 136],
   ];
   /** 알 하나의 색 (little-endian ABGR). 평소에는 띠마다 다른 모래색, 경고 · 초과 때는 그 단계의 색을 띠마다 다른 농도로 쓴다 */
-  const tint = (f: { top: RGB; deep: RGB; phase: Phase }, b: number) => {
+  const tint = (f: Frame, b: number, hot = f.phase !== 'normal') => {
     const { color, shade, dark } = bands[Math.min(b, bands.length - 1)];
     const l = (dark ? 0.5 : 1) * (0.74 + rnd() * 0.42);
-    const c = (i: number) => Math.min(255, (f.phase === 'normal' ? color[i] : f.top[i] + (f.deep[i] - f.top[i]) * shade) * l) | 0;
+    const c = (i: number) => Math.min(255, (hot ? f.top[i] + (f.deep[i] - f.top[i]) * shade : color[i]) * l) | 0;
     return ((ALPHA << 24) | (c(2) << 16) | (c(1) << 8) | c(0)) >>> 0;
   };
 
@@ -255,6 +260,7 @@ function sand(): Draw {
       spouts = Array.from({ length: count }, () => Math.round(gw * (0.12 + rnd() * 0.76))).sort((a, b) => a - b);
       if (tries > 40 || spouts.every((x, i) => i === 0 || x - spouts[i - 1] > gw * 0.2)) break;
     }
+    home = [...spouts];
     far = new Float32Array(gw);
     for (let x = 0; x < gw; x++) far[x] = Math.min(...spouts.map((sx) => Math.abs(x - sx)));
     tops = spouts.map(() => gh);
@@ -279,6 +285,7 @@ function sand(): Draw {
     }
     bounds.push(Infinity);
     full = area(gh * TOP);
+    limit = area(gh - ROOF);
   }
 
   function size(W: number, H: number) {
@@ -302,18 +309,22 @@ function sand(): Draw {
   function rebuild(target: number, f: Frame) {
     // 새 순서가 시작되면 줄기 자리도 새로 뽑는다
     if (target < 200 && count > 2000) place();
+    spouts = [...home];
+    tops = spouts.map(() => gh);
     grid.fill(EMPTY);
     px.fill(0);
     n = 0;
     count = 0;
     const h = peak(target);
+    const done = peak(full); // 이보다 위는 시간을 넘긴 뒤에 쌓인 모래: 붉게
     for (let x = 0; x < gw; x++) {
       const col = target > 0 ? column(x, h) : 0;
       for (let k = 0; k < col; k++) {
         const i = (gh - 1 - k) * gw + x;
         // 이 칸이 덮일 무렵의 봉우리 높이로 띠를 정한다
         grid[i] = REST;
-        px[i] = tint(f, bandAt[(k + far[x] / 2) | 0]);
+        const level = k + far[x] / 2;
+        px[i] = tint(f, bandAt[level | 0], level > done);
       }
       count += col;
     }
@@ -370,6 +381,12 @@ function sand(): Draw {
         // 아래 알이 아직 떨어지는 중: 옆으로 새지 않고 바짝 따라간다
         if (below === FALL) break;
         const d = rnd() < 0.5 ? 1 : -1;
+        if (state === FALL) {
+          // 막 닿은 알은 좌우로 조금 튄다. 곧은 줄기가 봉우리의 한쪽 비탈에만 떨어져 한쪽으로만 흘러내리는 것을 막는다
+          for (let hop = (rnd() * (SPLASH + 1)) | 0; hop > 0 && at(x + d, y) === EMPTY; hop--) x += d;
+          state = SLIDE;
+          continue;
+        }
         if (at(x + d, y + 1) === EMPTY) (x += d), y++;
         else if (at(x - d, y + 1) === EMPTY) (x -= d), y++;
         else if (at(x + d, y) === EMPTY && at(x + 2 * d, y + 1) === EMPTY) (x += 2 * d), y++;
@@ -402,7 +419,8 @@ function sand(): Draw {
       grid[i] = i === from ? SLIDE : state;
       ax[w] = x;
       ay[w] = y;
-      av[w] = v;
+      // 비탈을 흘러내리는 알은 점점 빨라진다 (그래야 긴 비탈에서도 모래가 두껍게 밀리지 않는다). 떨어지는 알은 빠르기가 그대로다
+      av[w] = state === SLIDE && v < FAST ? v + 0.25 : v;
       w++;
     }
     // 이번 박자에 깨어난 알을 뒤에 붙인다
@@ -416,6 +434,7 @@ function sand(): Draw {
 
   const FAST = 12; // 떨어지는 빠르기의 한도 (한 박자에 칸). 이보다 많이 내보낼 때는 줄기가 굵어진다
   const FLOW = 4; // 비탈을 흘러내리는 빠르기
+  const SPLASH = 1; // 닿을 때 좌우로 튀는 칸 수의 한도
   const BEAT = 14; // 한 박자에 내보내는 알. 이보다 굵으면 봉우리에서 흩어지지 못하고 기둥으로 쌓인다
   const BEATS = 8; // 한 장에 계산하는 박자의 한도. 양이 많으면 줄기를 굵히지 않고 박자를 늘린다
 
@@ -425,7 +444,8 @@ function sand(): Draw {
    */
   function pour(want: number, f: Frame) {
     const low = Math.max(...tops);
-    const open = spouts.map((_, i) => i).filter((i) => tops[i] >= low - 6);
+    const open = spouts.map((_, i) => i).filter((i) => tops[i] >= low - 6 && tops[i] > ROOF);
+    if (!open.length) return;
     const share = Math.min(want / open.length, BEAT);
     const width = Math.ceil(share / FAST);
     // 빠르기는 내림: 줄기의 한 줄은 늘 꽉 차고, 남는 알은 옆 칸에 붙어 내려간다
@@ -455,6 +475,27 @@ function sand(): Draw {
     }
   }
 
+  const ROOF = 24; // 봉우리가 화면 위에서 이만큼까지 차면 그 줄기는 더 내보내지 않는다
+
+  /** 시간을 넘긴 뒤: 봉우리가 화면 위에 닿은 줄기는 가장 낮은 골짜기로 옮겨 가서 남은 여백을 채운다 */
+  function wander() {
+    for (let i = 0; i < spouts.length; i++) {
+      if (tops[i] > ROOF + 4) continue;
+      let best = -1;
+      let deep = ROOF + 40; // 이보다 얕은 골짜기뿐이면 다 찬 것
+      for (let x = 4 + ((rnd() * 8) | 0); x < gw - 4; x += 8) {
+        if (spouts.some((sx, k) => k !== i && Math.abs(sx - x) < gw * 0.04)) continue;
+        let y = 0;
+        while (y < gh && grid[y * gw + x] !== REST) y += 4;
+        if (y > deep) (deep = y), (best = x);
+      }
+      if (best < 0) continue;
+      spouts[i] = best;
+      tops[i] = Math.min(gh, deep);
+      carry[i] = 0;
+    }
+  }
+
   /** 줄기 아래 봉우리의 높이를 따라간다 */
   function measure() {
     for (let i = 0; i < spouts.length; i++) {
@@ -469,12 +510,13 @@ function sand(): Draw {
   return (f) => {
     const { ctx, W, H } = f;
     if (Math.round(W / scale) !== gw || Math.round(H / scale) !== gh || !off) size(W, H);
-    const target = Math.round(full * f.p);
+    // 시간을 넘겨도 같은 빠르기로 계속 쌓인다 (그때 내리는 모래는 초과 색)
+    const target = Math.round(Math.min(f.more > 0 ? gw * (gh - ROOF) : full, full * (f.p + f.more)));
     const now = performance.now();
     // 줄기로는 따라잡을 수 없을 만큼 벌어졌거나 (처음 열 때 · 아주 짧은 순서) 줄어들었으면 다시 쌓는다
     const reach = BEAT * BEATS * 60 * 3;
-    if (f.still || rebuilt < 0 || ((target - count > reach || count - target > 2000) && now - rebuilt > 150)) {
-      rebuild(target, f);
+    if (f.still || rebuilt < 0 || (((target - count > reach && f.more === 0) || count - target > 2000) && now - rebuilt > 150)) {
+      rebuild(Math.min(target, limit), f);
       rebuilt = now;
       last = target;
     }
@@ -485,6 +527,10 @@ function sand(): Draw {
     const beats = Math.min(BEATS, Math.max(1, Math.ceil(Math.max(rate, (target - count) / 90) / (BEAT * 0.8 * spouts.length))));
     acc = Math.min(beats * 3, acc + frames * beats);
     measure();
+    if (f.more > 0 && now - moved > 600) {
+      moved = now;
+      wander();
+    }
     for (; acc >= 1; acc--) {
       if (count < target) pour(target - count, f);
       tick();
