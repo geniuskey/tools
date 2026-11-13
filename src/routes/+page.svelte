@@ -188,7 +188,7 @@
 
 <style>
   .wrap {
-    max-width: 1080px;
+    max-width: 1280px;
     margin: 0 auto;
     padding: 0 20px 40px;
   }
@@ -279,8 +279,8 @@
   }
   .grid {
     display: grid;
-    /* auto-fill: 한 장뿐인 분류도 카드 폭을 그대로 지킨다 */
-    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    /* 열 수를 고정: 한 장뿐인 분류도 카드 폭을 그대로 지킨다 */
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 18px;
   }
   .card {
@@ -858,7 +858,20 @@
     color: var(--muted);
   }
 
+  @media (max-width: 1200px) {
+    .grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+  @media (max-width: 920px) {
+    .grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
   @media (max-width: 600px) {
+    .grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
     .hero {
       padding: 32px 0 28px;
     }
