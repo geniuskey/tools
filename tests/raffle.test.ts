@@ -14,6 +14,23 @@ test('명단 파싱', () => {
   assert.equal(parseParticipants('김하늘,A\n김하늘,B').duplicates, 0);
 });
 
+test('한 줄 명단: 쉼표 · 세미콜론', () => {
+  const names = (t: string) => parseParticipants(t).list.map((p) => p.name);
+  assert.deepEqual(names('김하늘, 이서연 ,박민준,'), ['김하늘', '이서연', '박민준']);
+  assert.deepEqual(names('김하늘;이서연; 박민준'), ['김하늘', '이서연', '박민준']);
+  // 세미콜론으로 나눈 사람 안의 쉼표는 부가 정보
+  const r = parseParticipants('김하늘, 개발팀; 이서연, 디자인팀');
+  assert.deepEqual(r.list.map((p) => [p.name, p.info]), [['김하늘', '개발팀'], ['이서연', '디자인팀']]);
+  // 여러 줄이면 쉼표는 지금처럼 칸 구분, 세미콜론은 어느 줄에서나 사람 구분
+  assert.deepEqual(names('김하늘, 개발팀\n이서연, 디자인팀'), ['김하늘', '이서연']);
+  assert.deepEqual(names('김하늘; 이서연\n박민준\t개발팀'), ['김하늘', '이서연', '박민준']);
+  // 머리글 · 중복
+  assert.deepEqual(names('이름, 김하늘, 이서연'), ['김하늘', '이서연']);
+  assert.equal(parseParticipants('a, b, a').duplicates, 1);
+  assert.equal(dedupeText('a, b, a, c'), 'a, b, c');
+  assert.equal(dedupeText('a; b\nb; c\na'), 'a; b\nc');
+});
+
 test('중복 제거와 번호 범위', () => {
   assert.equal(dedupeText('a\nb\na\n\nB\nc'), 'a\nb\nc');
   assert.equal(dedupeText('이름\n김\n김'), '이름\n김');

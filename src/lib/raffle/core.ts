@@ -16,51 +16,93 @@ export interface ParseResult {
 
 const HEADER = /^(이름|성명|성함|name|names?|참가자|번호|no\.?)$/i;
 
-/** 한 줄에 한 명. 엑셀에서 복사한 탭 구분, CSV 쉼표 구분 모두 받는다. 첫 칸이 이름, 나머지는 부가 정보(소속 등). */
+/**
+ * 한 줄을 사람 단위로 나눈다.
+ * - 탭이 있으면 엑셀에서 복사한 한 사람 (칸 = 이름, 부가 정보)
+ * - 세미콜론이 있으면 세미콜론마다 한 사람 (그 안의 쉼표는 부가 정보)
+ * - 명단이 한 줄뿐이면 쉼표마다 한 사람
+ * - 그 밖에는 한 줄에 한 사람 (CSV: 쉼표 = 칸)
+ */
+function splitPeople(line: string, oneLine: boolean): { items: string[]; sep: string } {
+  if (line.includes('\t')) return { items: [line], sep: '' };
+  if (line.includes(';')) return { items: line.split(';'), sep: '; ' };
+  if (oneLine && line.includes(',')) return { items: line.split(','), sep: ', ' };
+  return { items: [line], sep: '' };
+}
+
+function columns(item: string): string[] {
+  return (item.includes('\t') ? item.split('\t') : item.split(','))
+    .map((c) => c.trim().replace(/^"(.*)"$/, '$1').trim())
+    .filter(Boolean);
+}
+
+interface Entry {
+  /** 몇 번째 줄 (빈 줄 제외) */
+  line: number;
+  raw: string;
+  cols: string[];
+  header: boolean;
+}
+
+function* entries(text: string): Generator<Entry> {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const oneLine = lines.length === 1;
+  let first = true;
+  for (let i = 0; i < lines.length; i++) {
+    for (const raw of splitPeople(lines[i], oneLine).items) {
+      const cols = columns(raw);
+      if (cols.length === 0) continue;
+      const header = first && HEADER.test(cols[0]);
+      first = false;
+      yield { line: i, raw: raw.trim(), cols, header };
+    }
+  }
+}
+
+const keyOf = (cols: string[]) => `${cols[0]}\u0000${cols.slice(1).join(' · ')}`.toLowerCase();
+
+/**
+ * 한 줄에 한 명. 엑셀에서 복사한 탭 구분, CSV 쉼표 구분 모두 받는다. 첫 칸이 이름, 나머지는 부가 정보(소속 등).
+ * "김하늘, 이서연, 박민준" 처럼 한 줄에 쉼표나 세미콜론으로 이어 쓴 명단도 받는다.
+ */
 export function parseParticipants(text: string): ParseResult {
   const list: Participant[] = [];
   const seen = new Set<string>();
   let duplicates = 0;
-  const lines = text.split(/\r?\n/);
-  let first = true;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-    const cols = (line.includes('\t') ? line.split('\t') : line.split(','))
-      .map((c) => c.trim().replace(/^"(.*)"$/, '$1').trim())
-      .filter(Boolean);
-    if (cols.length === 0) continue;
-    if (first) {
-      first = false;
-      if (HEADER.test(cols[0])) continue;
-    }
-    const name = cols[0];
-    const info = cols.slice(1).join(' · ');
-    const key = `${name}\u0000${info}`.toLowerCase();
+  for (const e of entries(text)) {
+    if (e.header) continue;
+    const key = keyOf(e.cols);
     if (seen.has(key)) duplicates++;
     seen.add(key);
-    list.push({ no: list.length + 1, name, info, key });
+    list.push({ no: list.length + 1, name: e.cols[0], info: e.cols.slice(1).join(' · '), key });
   }
   return { list, duplicates };
 }
 
-/** 완전히 같은 줄(이름+부가 정보)을 한 번만 남긴다. */
+/** 완전히 같은 사람(이름+부가 정보)을 한 번만 남긴다. 줄 모양과 구분자는 그대로 둔다. */
 export function dedupeText(text: string): string {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const oneLine = lines.length === 1;
+  const kept: string[][] = lines.map(() => []);
   const seen = new Set<string>();
-  const out: string[] = [];
-  let first = true;
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    // 머리글 줄은 그대로 둔다
-    const parsed = parseParticipants(first ? line : `\n${line}`).list[0];
-    first = false;
-    const key = parsed?.key ?? `#${line}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(line);
+  for (const e of entries(text)) {
+    if (!e.header) {
+      const key = keyOf(e.cols);
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    kept[e.line].push(e.raw);
   }
-  return out.join('\n');
+  return lines
+    .map((line, i) => kept[i].join(splitPeople(line, oneLine).sep))
+    .filter(Boolean)
+    .join('\n');
 }
 
 export function rangeText(from: number, to: number, prefix = '', suffix = ''): string {
