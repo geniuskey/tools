@@ -1,237 +1,343 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
+  import { EditorState, type Range, type Text } from '@codemirror/state';
+  import { setDeco, decoField, Spacer, Fold, H } from './editor';
+  import {
+    EditorView,
+    Decoration,
+    keymap,
+    lineNumbers,
+    highlightActiveLine,
+    highlightActiveLineGutter,
+    drawSelection,
+    placeholder,
+    type DecorationSet,
+  } from '@codemirror/view';
+  import { history, historyKeymap, defaultKeymap, undo as cmUndo, redo as cmRedo, undoDepth, redoDepth, insertTab } from '@codemirror/commands';
+  import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
   import { load, save } from '$lib/storage';
   import { downloadBlob, timestamp } from '$lib/download';
-  import { diffLines, normalizeJson, unifiedPatch, type Row, type Seg, type WsMode } from './core';
+  import { diffLines, normalizeJson, unifiedPatch, type DiffResult, type Row, type Seg, type WsMode } from './core';
   import { sampleJson, sampleText } from './samples';
 
   let { json = false, active = true }: { json?: boolean; active?: boolean } = $props();
 
-  // Beyond Compare 처럼 왼쪽 · 오른쪽 두 창이 곧 편집기이자 비교 결과다.
-  // 같은 줄끼리 높이를 맞추고(빈 자리는 빗금), 한 줄 높이가 고정이라 보이는 줄만 그린다.
+  // 왼쪽 · 오른쪽 창은 그냥 글 편집기다. 마음대로 고치면 알아서 다시 비교해
+  // 바뀐 줄을 칠하고, 같은 줄끼리 높이가 맞게 빈 자리(빗금)를 끼워 넣는다.
+  // 화면의 한 줄 높이가 고정이라 줄 · 빈 자리 · 접힌 줄 모두 H 의 배수다.
 
   type Side = 'a' | 'b';
   const SIDES: Side[] = ['a', 'b'];
   const KEY = 'tools:diff:v1';
   const CONTEXT = 3;
-  const H = 20;
-  const OVERSCAN = 12;
   const MAX_FILE = 40 * 1024 * 1024;
   const label = { a: '원본', b: '바뀐 내용' };
 
-  function lineCount(t: string) {
-    if (!t) return 0;
-    let n = 1;
-    for (let i = t.indexOf('\n'); i >= 0; i = t.indexOf('\n', i + 1)) n++;
-    return t.endsWith('\n') ? n - 1 : n;
-  }
-
-  let doc = $state({ a: { text: '', name: '' }, b: { text: '', name: '' } });
-  let opts = $state({ ws: 'none' as WsMode, ignoreCase: false, fold: true, sortKeys: true });
-  let editing = $state({ a: false, b: false });
+  let opts = $state({ ws: 'none' as WsMode, ignoreCase: false, fold: false, sortKeys: true });
   let ready = false;
   let notice = $state('');
   let copied = $state(false);
   let dropSide = $state<Side | null>(null);
+  let names = $state({ a: '', b: '' });
+  const eol = { a: '\n', b: '\n' };
+  /** 화면에 보여 줄 각 쪽 정보 (비교할 때마다 갱신) */
+  let info = $state({ a: { lines: 0, chars: 0, err: '' }, b: { lines: 0, chars: 0, err: '' } });
+  let hist = $state({ a: { u: 0, r: 0 }, b: { u: 0, r: 0 } });
+  let lastSide: Side = 'a';
 
-  // 입력이 멈춘 뒤에 비교한다. 줄 편집 · 블록 복사는 flush() 로 바로 반영한다.
-  let src = $state.raw({ a: '', b: '' });
-  $effect(() => {
-    const a = doc.a.text;
-    const b = doc.b.text;
-    if (a === src.a && b === src.b) return;
-    const t = setTimeout(() => (src = { a, b }), a.length + b.length > 300_000 ? 300 : 100);
-    return () => clearTimeout(t);
-  });
-  function flush() {
-    src = { a: doc.a.text, b: doc.b.text };
+  // ── 편집기 ────────────────────────────────────────────────
+  const views: Partial<Record<Side, EditorView>> = {};
+  let hosts: Partial<Record<Side, HTMLElement>> = $state({});
+
+  function makeView(side: Side, parent: HTMLElement) {
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: '',
+        extensions: [
+          lineNumbers(),
+          highlightActiveLine(),
+          highlightActiveLineGutter(),
+          drawSelection(),
+          history(),
+          search(),
+          highlightSelectionMatches(),
+          keymap.of([...searchKeymap, ...historyKeymap, ...defaultKeymap, { key: 'Tab', run: insertTab }]),
+          placeholder(placeholderText(side)),
+          decoField,
+          EditorView.contentAttributes.of({ 'aria-label': label[side], spellcheck: 'false', autocapitalize: 'off', autocorrect: 'off', 'data-side': side }),
+          EditorView.updateListener.of((u) => {
+            if (u.focusChanged && u.view.hasFocus) lastSide = side;
+            if (u.geometryChanged && side === 'a') measure();
+            if (!u.docChanged) return;
+            hist[side] = { u: undoDepth(u.state), r: redoDepth(u.state) };
+            // JSON 모드에서 빈 칸에 붙여넣으면 바로 보기 좋게 정리한다
+            if (json && u.startState.doc.length === 0 && u.transactions.some((t) => t.isUserEvent('input.paste'))) {
+              setTimeout(() => tidy(side));
+            }
+            schedule();
+          }),
+        ],
+      }),
+    });
+    view.scrollDOM.addEventListener('scroll', () => onScroll(side));
+    return view;
   }
 
-  const prepared = $derived.by(() => {
-    if (!json) return { a: src.a, b: src.b, errA: '', errB: '' };
-    const a = normalizeJson(src.a, opts.sortKeys);
-    const b = normalizeJson(src.b, opts.sortKeys);
-    return { a: a.ok ? a.text : '', b: b.ok ? b.text : '', errA: a.ok ? '' : a.error, errB: b.ok ? '' : b.error };
-  });
-  const has = $derived({ a: prepared.a !== '', b: prepared.b !== '' });
-  const blank = $derived(!doc.a.text && !doc.b.text);
-  /** 한쪽만 있으면 그쪽을 그대로 보여 주고, 빈 쪽에는 입력 칸을 띄운다 */
-  const solo = $derived(has.a !== has.b);
-  const result = $derived.by(() => {
-    const o = { ws: opts.ws, ignoreCase: opts.ignoreCase };
-    if (has.a && has.b) return diffLines(prepared.a, prepared.b, o);
-    if (has.a || has.b) {
-      const t = has.a ? prepared.a : prepared.b;
-      return diffLines(t, t, o);
-    }
-    return null;
-  });
-  const changes = $derived(result && !solo ? result.added + result.removed + result.modified : 0);
-  const same = $derived(!!result && !solo && !changes);
+  function placeholderText(side: Side) {
+    return `${label[side]}을 붙여넣거나 파일을 끌어다 놓으세요.\n파일 두 개를 한꺼번에 놓으면 양쪽에 들어갑니다.\n\n내용은 이 브라우저 밖으로 나가지 않습니다.`;
+  }
 
-  type RowItem = { k: 'row'; row: Row; block: number; first: boolean; pa: number; pb: number };
-  type Item = { k: 'fold'; key: number; count: number } | RowItem;
+  const textOf = (side: Side) => views[side]?.state.doc.toString() ?? '';
+
+  /** 한 쪽 내용을 통째로 바꾼다 (실행 취소할 수 있게 기록에 남긴다) */
+  function setText(side: Side, text: string, userEvent = 'input.replace') {
+    const v = views[side];
+    if (!v) return;
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, userEvent, scrollIntoView: false });
+  }
+
+  // ── 비교 ──────────────────────────────────────────────────
+  type RowItem = { k: 'row'; row: Row; block: number };
+  type Item = { k: 'fold'; key: number; count: number; a0: number; a1: number; b0: number; b1: number } | RowItem;
   interface Block {
     at: number;
+    n: number;
     a0: number;
     a1: number;
     b0: number;
     b1: number;
   }
 
-  let expanded = $state.raw(new Set<number>());
+  let res = $state.raw<DiffResult | null>(null);
+  let both = $state(false);
+  let jsonSame = $state<null | boolean>(null);
+  let rawSame = $state(false);
+  let items = $state.raw<Item[]>([]);
+  let blocks = $state.raw<Block[]>([]);
+  let expanded = new Set<number>();
   let cur = $state(-1);
-  let edit = $state<{ side: Side; line: number; caret: number } | null>(null);
-  let keepView = false;
 
-  $effect(() => {
-    result;
-    if (keepView) {
-      keepView = false;
-      return;
-    }
-    expanded = new Set();
-    cur = -1;
-  });
-
-  const built = $derived.by(() => {
-    const items: Item[] = [];
-    const blocks: Block[] = [];
-    if (!result) return { items, blocks };
-    const rows = result.rows;
-    const ed = edit;
-    let pa = 0;
-    let pb = 0;
-    const push = (r: Row, block: number, first: boolean) => {
-      // pa · pb: 이 줄 앞에 있는 각 쪽 줄 수 (빈 자리에 새 줄을 끼울 위치)
-      items.push({ k: 'row', row: r, block, first, pa: r.a ?? pa, pb: r.b ?? pb });
-      if (r.a !== null) pa = r.a + 1;
-      if (r.b !== null) pb = r.b + 1;
-    };
-    let i = 0;
-    while (i < rows.length) {
-      let e = i;
-      if (!rows[i].changed) {
-        while (e < rows.length && !rows[e].changed) e++;
-        const head = i === 0 ? 0 : CONTEXT;
-        const tail = e === rows.length ? 0 : CONTEXT;
-        const f0 = i + head;
-        const f1 = e - tail;
-        // 고치고 있는 줄, 문서 전체가 같은 경우는 접지 않는다
-        const holdsEdit = !!ed && f1 > f0 && rows[f0][ed.side]! <= ed.line && ed.line <= rows[f1 - 1][ed.side]!;
-        if (opts.fold && (head || tail) && e - i > head + tail + 1 && !expanded.has(i) && !holdsEdit) {
-          for (let r = i; r < f0; r++) push(rows[r], -1, false);
-          items.push({ k: 'fold', key: i, count: f1 - f0 });
-          pa = rows[f1 - 1].a! + 1;
-          pb = rows[f1 - 1].b! + 1;
-          for (let r = f1; r < e; r++) push(rows[r], -1, false);
-        } else {
-          for (let r = i; r < e; r++) push(rows[r], -1, false);
-        }
-      } else {
-        while (e < rows.length && rows[e].changed) e++;
-        const blk: Block = { at: items.length, a0: pa, a1: pa, b0: pb, b1: pb };
-        for (let r = i; r < e; r++) push(rows[r], blocks.length, r === i);
-        blk.a1 = pa;
-        blk.b1 = pb;
-        blocks.push(blk);
-      }
-      i = e;
-    }
-    return { items, blocks };
-  });
-  const items = $derived(built.items);
-  const lnw = $derived(
-    `${String(Math.max(result?.linesA.length ?? 0, result?.linesB.length ?? 0, lineCount(doc.a.text), lineCount(doc.b.text), 10)).length + 1.5}ch`,
-  );
-
-  // ── 보이는 줄만 그리기 ─────────────────────────────────────
-  let scroller = $state<HTMLElement>();
-  let top = $state(0);
-  let vh = $state(600);
-  let sbw = $state(0);
-  const start = $derived(Math.max(0, Math.floor(top / H) - OVERSCAN));
-  const end = $derived(Math.min(items.length, Math.ceil((top + vh) / H) + OVERSCAN));
-  const win = $derived(items.slice(start, end));
-
-  $effect(() => {
-    const el = scroller;
-    if (!el) return;
-    const ro = new ResizeObserver(() => {
-      vh = el.clientHeight;
-      sbw = el.offsetWidth - el.clientWidth;
-    });
-    ro.observe(el);
-    // 가로 휠 · Shift+휠은 두 창을 함께 가로로 민다
-    const wheel = (e: WheelEvent) => {
-      const dx = e.shiftKey ? e.deltaX || e.deltaY : Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : 0;
-      if (!dx || maxSx <= 0) return;
-      e.preventDefault();
-      sx = Math.max(0, Math.min(maxSx, sx + dx));
-    };
-    el.addEventListener('wheel', wheel, { passive: false });
-    return () => {
-      ro.disconnect();
-      el.removeEventListener('wheel', wheel);
-    };
-  });
-
-  function reveal(index: number) {
-    if (scroller) scroller.scrollTop = Math.max(0, index * H - vh / 2 + H / 2);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  function schedule() {
+    clearTimeout(timer);
+    const size = (views.a?.state.doc.length ?? 0) + (views.b?.state.doc.length ?? 0);
+    timer = setTimeout(recompute, size > 1_000_000 ? 400 : size > 200_000 ? 150 : 30);
   }
 
-  function go(delta: number) {
-    const n = built.blocks.length;
-    if (!n) return;
-    cur = cur < 0 || cur >= n ? (delta > 0 ? 0 : n - 1) : (cur + delta + n) % n;
-    reveal(built.blocks[cur].at);
+  function recompute() {
+    clearTimeout(timer);
+    if (!views.a || !views.b) return;
+    // 한글 조합 중에는 장식을 바꾸지 않는다 (조합이 끊기지 않게)
+    if (views.a.composing || views.b.composing) {
+      timer = setTimeout(recompute, 150);
+      return;
+    }
+    const a = textOf('a');
+    const b = textOf('b');
+    const errs = { a: '', b: '' };
+    jsonSame = null;
+    if (json && a.trim() && b.trim()) {
+      const na = normalizeJson(a, opts.sortKeys);
+      const nb = normalizeJson(b, opts.sortKeys);
+      if (!na.ok) errs.a = na.error;
+      if (!nb.ok) errs.b = nb.error;
+      if (na.ok && nb.ok) jsonSame = na.text === nb.text;
+    } else if (json) {
+      for (const s of SIDES) {
+        const t = s === 'a' ? a : b;
+        const n = normalizeJson(t, opts.sortKeys);
+        if (!n.ok) errs[s] = n.error;
+      }
+    }
+    for (const s of SIDES) {
+      const t = s === 'a' ? a : b;
+      info[s] = { lines: views[s]!.state.doc.lines - (t === '' || t.endsWith('\n') ? 1 : 0), chars: t.length, err: errs[s] };
+    }
+    both = a !== '' && b !== '';
+    rawSame = a === b;
+    res = both ? diffLines(a, b, { ws: opts.ws, ignoreCase: opts.ignoreCase }) : null;
+    rebuild();
+  }
+
+  /** 비교 결과로 화면의 줄 목록을 만들고 양쪽 편집기에 장식을 입힌다 */
+  function rebuild() {
+    const va = views.a;
+    const vb = views.b;
+    if (!va || !vb) return;
+    const out: Item[] = [];
+    const blks: Block[] = [];
+    if (res) {
+      const rows = res.rows;
+      // 커서가 있는 줄은 접지 않는다
+      const hold = SIDES.map((s) => {
+        const v = views[s]!;
+        return v.hasFocus ? v.state.doc.lineAt(v.state.selection.main.head).number - 1 : -1;
+      });
+      let i = 0;
+      while (i < rows.length) {
+        let e = i;
+        if (!rows[i].changed) {
+          while (e < rows.length && !rows[e].changed) e++;
+          const head = i === 0 ? 0 : CONTEXT;
+          const tail = e === rows.length ? 0 : CONTEXT;
+          const f0 = i + head;
+          const f1 = e - tail;
+          const key = rows[i].a!;
+          const holds = f1 > f0 && ((rows[f0].a! <= hold[0] && hold[0] <= rows[f1 - 1].a!) || (rows[f0].b! <= hold[1] && hold[1] <= rows[f1 - 1].b!));
+          if (opts.fold && (head || tail) && e - i > head + tail + 1 && !expanded.has(key) && !holds) {
+            for (let r = i; r < f0; r++) out.push({ k: 'row', row: rows[r], block: -1 });
+            out.push({ k: 'fold', key, count: f1 - f0, a0: rows[f0].a!, a1: rows[f1 - 1].a!, b0: rows[f0].b!, b1: rows[f1 - 1].b! });
+            for (let r = f1; r < e; r++) out.push({ k: 'row', row: rows[r], block: -1 });
+          } else {
+            for (let r = i; r < e; r++) out.push({ k: 'row', row: rows[r], block: -1 });
+          }
+        } else {
+          while (e < rows.length && rows[e].changed) e++;
+          let a0 = -1;
+          let b0 = -1;
+          let a1 = -1;
+          let b1 = -1;
+          for (let r = i; r < e; r++) {
+            const { a, b } = rows[r];
+            if (a !== null) {
+              if (a0 < 0) a0 = a;
+              a1 = a + 1;
+            }
+            if (b !== null) {
+              if (b0 < 0) b0 = b;
+              b1 = b + 1;
+            }
+          }
+          // 한쪽에 줄이 없으면 그 자리(다음 줄 앞)를 쓴다
+          const prev = i > 0 ? rows[i - 1] : null;
+          if (a0 < 0) a0 = a1 = prev ? prev.a! + 1 : 0;
+          if (b0 < 0) b0 = b1 = prev ? prev.b! + 1 : 0;
+          blks.push({ at: out.length, n: e - i, a0, a1, b0, b1 });
+          for (let r = i; r < e; r++) out.push({ k: 'row', row: rows[r], block: blks.length - 1 });
+        }
+        i = e;
+      }
+    }
+    items = out;
+    blocks = blks;
+    if (cur >= blks.length) cur = -1;
+    for (const s of SIDES) {
+      const v = views[s]!;
+      v.dispatch({ effects: setDeco.of(decorate(s, v.state.doc, out)) });
+    }
+  }
+
+  const lineStart = (doc: Text, i: number) => (i < doc.lines ? doc.line(i + 1).from : doc.length);
+
+  function decorate(side: Side, doc: Text, list: Item[]): DecorationSet {
+    if (!list.length || (res && !res.added && !res.removed && !res.modified && !opts.fold)) return Decoration.none;
+    const out: Range<Decoration>[] = [];
+    const cls = side === 'a' ? 'cm-del' : 'cm-ins';
+    const lineDeco = Decoration.line({ class: cls });
+    const mark = Decoration.mark({ class: 'cm-chg' });
+    let gap = 0;
+    let next = 0; // 이 쪽에서 다음에 나올 줄 번호
+    const flushGap = () => {
+      if (!gap) return;
+      const pos = lineStart(doc, next);
+      const end = next >= doc.lines;
+      out.push(Decoration.widget({ widget: new Spacer(gap), block: true, side: end ? 1 : -1 }).range(pos));
+      gap = 0;
+    };
+    for (const it of list) {
+      if (it.k === 'fold') {
+        flushGap();
+        const l0 = side === 'a' ? it.a0 : it.b0;
+        const l1 = side === 'a' ? it.a1 : it.b1;
+        if (l1 >= doc.lines) continue;
+        out.push(Decoration.replace({ widget: new Fold(it.key, it.count, expand), block: true }).range(doc.line(l0 + 1).from, doc.line(l1 + 1).to));
+        next = l1 + 1;
+        continue;
+      }
+      const r = it.row;
+      const line = r[side];
+      if (line === null) {
+        gap++;
+        continue;
+      }
+      next = line;
+      flushGap();
+      next = line + 1;
+      if (!r.changed || line >= doc.lines) continue;
+      const l = doc.line(line + 1);
+      out.push(lineDeco.range(l.from));
+      const segs: Seg[] | undefined = side === 'a' ? r.segA : r.segB;
+      if (segs) {
+        let p = l.from;
+        for (const g of segs) {
+          const q = Math.min(l.to, p + g.text.length);
+          if (g.changed && q > p) out.push(mark.range(p, q));
+          p = q;
+        }
+      }
+    }
+    flushGap();
+    return Decoration.set(out, true);
   }
 
   function expand(key: number) {
-    expanded = new Set(expanded).add(key);
+    expanded.add(key);
+    rebuild();
   }
 
-  // ── 가로 스크롤: 두 창이 같이 움직인다 ──────────────────────
-  let sx = $state(0);
-  let colW = $state(0);
-  let ctx: CanvasRenderingContext2D | null = null;
-  function textWidth(lines: string[], el: HTMLElement | undefined): number {
-    if (!lines.length || !el) return 0;
-    let maxLen = 0;
-    for (const l of lines) if (l.length > maxLen) maxLen = l.length;
-    ctx ??= document.createElement('canvas').getContext('2d');
-    if (!ctx) return maxLen * 8;
-    const cs = getComputedStyle(el);
-    ctx.font = `${cs.fontSize} ${cs.fontFamily}`;
-    let w = 0;
-    let seen = 0;
-    for (const l of lines) {
-      if (l.length < maxLen / 2) continue;
-      w = Math.max(w, ctx.measureText(l.replace(/\t/g, '    ')).width);
-      if (++seen > 300) break;
-    }
-    return Math.ceil(w);
-  }
-  const maxW = $derived(result ? Math.max(textWidth(result.linesA, scroller), textWidth(result.linesB, scroller)) + 20 : 0);
-  const maxSx = $derived(Math.max(0, maxW - colW));
-  $effect(() => {
-    if (sx > maxSx) sx = maxSx;
-  });
+  const changes = $derived(res ? res.added + res.removed + res.modified : 0);
+  const same = $derived(json && jsonSame !== null ? jsonSame : both && !!res && !changes);
 
-  let hbars: HTMLElement[] = $state([]);
-  $effect(() => {
-    const el = hbars[0];
+  // ── 스크롤: 두 창이 같이 움직인다 ───────────────────────────
+  let top = $state(0);
+  let vh = $state(600);
+  let sh = $state(1);
+  let syncing: Side | null = null;
+  function measure() {
+    const el = views.a?.scrollDOM;
     if (!el) return;
-    const ro = new ResizeObserver(() => (colW = el.clientWidth));
-    ro.observe(el);
-    return () => ro.disconnect();
-  });
-  $effect(() => {
-    for (const el of hbars) if (el && Math.abs(el.scrollLeft - sx) > 0.5) el.scrollLeft = sx;
-  });
+    top = el.scrollTop;
+    vh = el.clientHeight;
+    sh = Math.max(el.scrollHeight, 1);
+  }
+  function onScroll(side: Side) {
+    const from = views[side]?.scrollDOM;
+    const other = views[side === 'a' ? 'b' : 'a']?.scrollDOM;
+    if (!from || !other) return;
+    top = from.scrollTop;
+    vh = from.clientHeight;
+    sh = Math.max(from.scrollHeight, 1);
+    if (syncing === side) {
+      syncing = null;
+      return;
+    }
+    if (Math.abs(other.scrollTop - from.scrollTop) > 0.5 || Math.abs(other.scrollLeft - from.scrollLeft) > 0.5) {
+      syncing = side === 'a' ? 'b' : 'a';
+      other.scrollTop = from.scrollTop;
+      other.scrollLeft = from.scrollLeft;
+    }
+  }
 
-  // 한쪽 글만 골라 복사할 수 있게, 누른 쪽이 아닌 창은 선택되지 않게 한다
-  let selSide = $state<Side>('a');
+  function reveal(index: number) {
+    const el = views.a?.scrollDOM;
+    if (el) el.scrollTop = Math.max(0, index * H - el.clientHeight / 2 + H / 2);
+  }
+
+  function go(delta: number) {
+    const n = blocks.length;
+    if (!n) return;
+    cur = cur < 0 || cur >= n ? (delta > 0 ? 0 : n - 1) : (cur + delta + n) % n;
+    const b = blocks[cur];
+    reveal(b.at);
+    // 커서도 그 차이로 옮겨 바로 고칠 수 있게 한다
+    const v = views[lastSide]!;
+    const pos = lineStart(v.state.doc, lastSide === 'a' ? b.a0 : b.b0);
+    v.dispatch({ selection: { anchor: pos } });
+  }
+
+  // 가운데 띠: 보이는 차이 블록만 그린다
+  const bands = $derived(blocks.map((b, i) => ({ ...b, i })).filter((b) => (b.at + b.n) * H >= top && b.at * H <= top + vh));
 
   // 스크롤 옆 지도: 전체에서 바뀐 곳이 어디쯤인지
   const map = $derived.by(() => {
@@ -253,164 +359,57 @@
     reveal(Math.min(items.length - 1, Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * items.length))));
   }
 
-  // ── 고치기 · 되돌리기 ─────────────────────────────────────
-  type Snap = { a: { text: string; name: string }; b: { text: string; name: string } };
-  let past = $state.raw<Snap[]>([]);
-  let future = $state.raw<Snap[]>([]);
+  // ── 블록 복사 · 되돌리기 ──────────────────────────────────
+  function copyBlock(b: Block, to: Side) {
+    const from: Side = to === 'a' ? 'b' : 'a';
+    const src = views[from]!.state.doc;
+    const dst = views[to]!;
+    const doc = dst.state.doc;
+    const [s0, s1] = from === 'a' ? [b.a0, b.a1] : [b.b0, b.b1];
+    const [x0, x1] = to === 'a' ? [b.a0, b.a1] : [b.b0, b.b1];
+    let insert = src.sliceString(lineStart(src, s0), lineStart(src, s1));
+    let p0 = lineStart(doc, x0);
+    const p1 = lineStart(doc, x1);
+    const len = doc.length;
+    const openEnd = len > 0 && p1 === len && doc.sliceString(len - 1) !== '\n';
+    if (insert && !insert.endsWith('\n') && p1 < len) insert += '\n';
+    if (openEnd) {
+      // 마지막 줄 뒤에 줄바꿈이 없는 문서: 줄바꿈 위치를 맞춘다
+      insert = insert.replace(/\n$/, '');
+      if (p0 === p1 && insert) insert = '\n' + insert;
+      else if (p0 < p1 && !insert && p0 > 0) p0--;
+    }
+    lastSide = to;
+    dst.dispatch({ changes: { from: p0, to: p1, insert }, userEvent: 'input.copy-block', scrollIntoView: false });
+    recompute();
+  }
 
-  function snap(): Snap {
-    return { a: { ...doc.a }, b: { ...doc.b } };
-  }
-  function remember() {
-    const s = snap();
-    const last = past[past.length - 1];
-    if (last && last.a.text === s.a.text && last.b.text === s.b.text) return;
-    const cap = s.a.text.length + s.b.text.length > 2_000_000 ? 5 : 100;
-    past = [...past.slice(-(cap - 1)), s];
-    future = [];
-  }
-  function restore(from: Snap[], to: Snap[]): [Snap[], Snap[]] {
-    if (!from.length) return [from, to];
-    const s = from[from.length - 1];
-    const now = snap();
-    doc = { a: { ...s.a }, b: { ...s.b } };
-    edit = null;
-    keepView = true;
-    flush();
-    return [from.slice(0, -1), [...to, now]];
-  }
   function undo() {
-    [past, future] = restore(past, future);
+    const s = hist[lastSide].u ? lastSide : lastSide === 'a' ? 'b' : 'a';
+    if (views[s]) cmUndo(views[s]!);
   }
   function redo() {
-    [future, past] = restore(future, past);
-  }
-
-  const linesOf = (side: Side) => (side === 'a' ? result?.linesA : result?.linesB) ?? [];
-
-  function setLines(side: Side, lines: string[]) {
-    const old = doc[side].text;
-    const eol = old.includes('\r\n') ? '\r\n' : '\n';
-    const tail = json || old === '' || old.endsWith('\n') ? eol : '';
-    const text = lines.length ? lines.join(eol) + tail : '';
-    if (text === old) return;
-    remember();
-    doc[side].text = text;
-    keepView = true;
-    flush();
-  }
-
-  function copyBlock(b: Block, to: Side) {
-    const from = to === 'a' ? linesOf('b').slice(b.b0, b.b1) : linesOf('a').slice(b.a0, b.a1);
-    const L = linesOf(to);
-    const [x0, x1] = to === 'a' ? [b.a0, b.a1] : [b.b0, b.b1];
-    setLines(to, L.slice(0, x0).concat(from, L.slice(x1)));
-  }
-
-  function caretFrom(cell: Element): number {
-    try {
-      const sel = getSelection();
-      if (!sel?.rangeCount || !cell.contains(sel.anchorNode)) return Infinity;
-      const r = document.createRange();
-      r.selectNodeContents(cell);
-      r.setEnd(sel.anchorNode!, sel.anchorOffset);
-      return r.toString().length;
-    } catch {
-      return Infinity;
-    }
-  }
-
-  // 두 번 누르면 그 줄을 바로 고친다. 빈 자리를 누르면 그 자리에 새 줄을 끼운다.
-  function startEdit(side: Side, it: RowItem, e: MouseEvent) {
-    if (!result || !has[side]) return;
-    const line = it.row[side];
-    if (line === null) {
-      const at = side === 'a' ? it.pa : it.pb;
-      const L = linesOf(side);
-      setLines(side, L.slice(0, at).concat('', L.slice(at)));
-      edit = { side, line: at, caret: 0 };
-      return;
-    }
-    edit = { side, line, caret: caretFrom(e.currentTarget as Element) };
-  }
-
-  // 키로 이미 처리한 뒤 입력 칸이 사라지며 생기는 blur 는 무시한다
-  let skipBlur: HTMLInputElement | null = null;
-
-  function finish(el: HTMLInputElement, next: { line: number; caret: number } | null, lines?: string[]) {
-    const ed = edit;
-    if (!ed || skipBlur === el) return;
-    skipBlur = el;
-    const L = lines ?? linesOf(ed.side).slice();
-    if (!lines) L[ed.line] = el.value;
-    setLines(ed.side, L);
-    edit = next ? { side: ed.side, ...next } : null;
-  }
-
-  function onEditKey(e: KeyboardEvent) {
-    const el = e.currentTarget as HTMLInputElement;
-    const ed = edit;
-    if (!ed || e.isComposing || e.altKey) return;
-    const v = el.value;
-    const s = el.selectionStart ?? 0;
-    const t = el.selectionEnd ?? 0;
-    const L = linesOf(ed.side).slice();
-    if (e.key === 'Escape') {
-      skipBlur = el;
-      edit = null;
-    } else if (e.key === 'Enter') {
-      L.splice(ed.line, 1, v.slice(0, s), v.slice(t));
-      finish(el, { line: ed.line + 1, caret: 0 }, L);
-    } else if (e.key === 'Backspace' && s === 0 && t === 0 && ed.line > 0) {
-      const prev = L[ed.line - 1];
-      L.splice(ed.line - 1, 2, prev + v);
-      finish(el, { line: ed.line - 1, caret: prev.length }, L);
-    } else if (e.key === 'Delete' && s === v.length && t === v.length && ed.line < L.length - 1) {
-      L.splice(ed.line, 2, v + L[ed.line + 1]);
-      finish(el, { line: ed.line, caret: v.length }, L);
-    } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      const line = ed.line + (e.key === 'ArrowUp' ? -1 : 1);
-      if (line < 0 || line >= L.length) return;
-      finish(el, { line, caret: s });
-    } else return;
-    e.preventDefault();
-  }
-
-  function onEditPaste(e: ClipboardEvent) {
-    const text = e.clipboardData?.getData('text/plain') ?? '';
-    const ed = edit;
-    if (!ed || !/[\r\n]/.test(text)) return;
-    e.preventDefault();
-    const el = e.currentTarget as HTMLInputElement;
-    const v = el.value;
-    const parts = text.replace(/\r\n?/g, '\n').split('\n');
-    const last = parts.length - 1;
-    const caret = parts[last].length;
-    parts[0] = v.slice(0, el.selectionStart ?? 0) + parts[0];
-    parts[last] += v.slice(el.selectionEnd ?? v.length);
-    const L = linesOf(ed.side).slice();
-    L.splice(ed.line, 1, ...parts);
-    finish(el, { line: ed.line + last, caret }, L);
-  }
-
-  function focusAt(caret: number) {
-    return (el: HTMLInputElement) => {
-      skipBlur = null;
-      el.focus();
-      const c = Math.min(caret, el.value.length);
-      el.setSelectionRange(c, c);
-      el.parentElement?.parentElement?.scrollIntoView({ block: 'nearest' });
-    };
+    const s = hist[lastSide].r ? lastSide : lastSide === 'a' ? 'b' : 'a';
+    if (views[s]) cmRedo(views[s]!);
   }
 
   // ── 파일 · 입력 ───────────────────────────────────────────
+  function put(side: Side, text: string, name: string) {
+    eol[side] = text.includes('\r\n') ? '\r\n' : '\n';
+    names[side] = name;
+    expanded = new Set();
+    if (json) {
+      const n = normalizeJson(text, opts.sortKeys);
+      if (n.ok && n.text) text = n.text;
+    }
+    setText(side, text.replace(/\r\n?/g, '\n'));
+  }
+
   async function readFile(side: Side, f: File) {
     if (f.size > MAX_FILE) return flash(`${f.name}: 파일이 너무 큽니다 (최대 40MB)`);
     const text = await f.text();
     if (text.slice(0, 4000).includes('\u0000')) return flash(`${f.name}: 텍스트 파일이 아닙니다`);
-    remember();
-    doc[side] = { text, name: f.name };
-    editing[side] = false;
+    put(side, text, f.name);
   }
 
   // 파일 두 개를 한꺼번에 놓으면 왼쪽 · 오른쪽에 차례로 넣는다
@@ -426,6 +425,7 @@
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     return e.clientX < r.left + r.width / 2 ? 'a' : 'b';
   }
+  const hasFiles = (e: DragEvent) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
 
   function flash(msg: string) {
     notice = msg;
@@ -433,49 +433,35 @@
   }
 
   function swap() {
-    remember();
-    doc = { a: doc.b, b: doc.a };
-    edit = null;
+    const a = textOf('a');
+    const b = textOf('b');
+    names = { a: names.b, b: names.a };
+    [eol.a, eol.b] = [eol.b, eol.a];
+    expanded = new Set();
+    setText('a', b);
+    setText('b', a);
   }
   function clear(side: Side) {
-    remember();
-    doc[side] = { text: '', name: '' };
-    edit = null;
+    names[side] = '';
+    setText(side, '', 'delete');
   }
   function sample() {
-    remember();
     const s = json ? sampleJson : sampleText;
-    doc = { a: { text: s.a, name: '' }, b: { text: s.b, name: '' } };
-    editing = { a: false, b: false };
+    put('a', s.a, '');
+    put('b', s.b, '');
+  }
+  /** JSON 을 키 정렬 · 들여쓰기 2칸으로 정리한다 */
+  function tidy(side: Side) {
+    const n = normalizeJson(textOf(side), opts.sortKeys);
+    if (n.ok && n.text && n.text !== textOf(side)) setText(side, n.text);
   }
   function saveSide(side: Side) {
-    downloadBlob(new Blob([doc[side].text], { type: 'text/plain' }), doc[side].name || `${side === 'a' ? 'left' : 'right'}-${timestamp()}.${json ? 'json' : 'txt'}`);
-  }
-  function toggleEditor(side: Side) {
-    edit = null;
-    if (editing[side]) {
-      editing[side] = false;
-      flush();
-    } else {
-      editing[side] = true;
-      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(`.ovl textarea[data-side="${side}"]`)?.focus());
-    }
-  }
-  const showEditor = (side: Side) => editing[side] || !has[side];
-
-  // 입력 칸에도 줄 번호를 붙인다. 보이는 부분의 번호만 그리고 입력 칸 스크롤을 따라간다.
-  let edTop = $state({ a: 0, b: 0 });
-  function edNumbers(side: Side) {
-    const n = Math.max(1, lineCount(doc[side].text) + (doc[side].text.endsWith('\n') ? 1 : 0));
-    const first = Math.min(n - 1, Math.floor(edTop[side] / H));
-    const last = Math.min(n, first + Math.ceil(vh / H) + 2);
-    let text = '';
-    for (let i = first; i < last; i++) text += i + 1 + '\n';
-    return { text, y: first * H - edTop[side] };
+    const text = eol[side] === '\n' ? textOf(side) : textOf(side).replace(/\n/g, eol[side]);
+    downloadBlob(new Blob([text], { type: 'text/plain' }), names[side] || `${side === 'a' ? 'left' : 'right'}-${timestamp()}.${json ? 'json' : 'txt'}`);
   }
 
   function patch() {
-    return unifiedPatch(prepared.a, prepared.b, doc.a.name || 'a', doc.b.name || 'b');
+    return unifiedPatch(textOf('a'), textOf('b'), names.a || 'a', names.b || 'b');
   }
   async function copyPatch() {
     try {
@@ -492,7 +478,7 @@
 
   function onKeydown(e: KeyboardEvent) {
     if (!active) return;
-    const typing = (e.target as HTMLElement)?.matches?.('input, textarea');
+    const typing = !!(e.target as HTMLElement)?.closest?.('input, textarea, select, [contenteditable="true"]');
     if ((e.metaKey || e.ctrlKey) && !typing && (e.key === 'z' || e.key === 'Z' || e.key === 'y')) {
       e.preventDefault();
       if (e.key === 'y' || e.shiftKey) redo();
@@ -507,12 +493,31 @@
   }
 
   const ignored = $derived([opts.ws !== 'none' && '공백', opts.ignoreCase && '대소문자', json && opts.sortKeys && '키 순서'].filter(Boolean).join(' · '));
+  const blank = $derived(!info.a.chars && !info.b.chars);
+
+  // 옵션 · 모드가 바뀌면 다시 비교한다
+  $effect(() => {
+    void [opts.ws, opts.ignoreCase, opts.fold, opts.sortKeys, json];
+    if (!opts.fold) expanded = new Set();
+    untrack(recompute);
+  });
+
+  // 숨겨졌다 다시 보이면 크기를 다시 잰다
+  $effect(() => {
+    if (active) for (const s of SIDES) views[s]?.requestMeasure();
+  });
 
   onMount(() => {
     const saved = load<Record<string, unknown>>(KEY, {});
     delete saved.view;
     opts = { ...opts, ...saved };
     ready = true;
+    for (const s of SIDES) views[s] = makeView(s, hosts[s]!);
+    recompute();
+    return () => {
+      clearTimeout(timer);
+      for (const s of SIDES) views[s]?.destroy();
+    };
   });
   $effect(() => {
     const snapOpts = $state.snapshot(opts);
@@ -522,45 +527,12 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-{#snippet tx(segs: Seg[] | undefined, text: string)}{#if segs}{#each segs as g, i (i)}{#if g.changed}<mark>{g.text}</mark>{:else}{g.text}{/if}{/each}{:else}{text}{/if}{/snippet}
-
-{#snippet cell(side: Side, it: RowItem)}
-  {@const r = it.row}
-  {@const line = r[side]}
-  {#if edit && edit.side === side && line === edit.line}
-    <span class="tx editing s{side}">
-      <input
-        class="line-in"
-        value={linesOf(side)[line]}
-        spellcheck="false"
-        autocapitalize="off"
-        aria-label="{label[side]} {line + 1}번째 줄"
-        onkeydown={onEditKey}
-        onpaste={onEditPaste}
-        onblur={(e) => finish(e.currentTarget, null)}
-        {@attach focusAt(edit.caret)}
-      />
-    </span>
-  {:else}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <span
-      class="tx s{side}"
-      class:del={side === 'a' && r.changed && line !== null}
-      class:ins={side === 'b' && r.changed && line !== null}
-      class:void={line === null}
-      onmousedown={() => (selSide = side)}
-      ondblclick={(e) => startEdit(side, it, e)}
-      ><span class="t">{#if line !== null}{@render tx(side === 'a' ? r.segA : r.segB, linesOf(side)[line])}{/if}</span></span
-    >
-  {/if}
-{/snippet}
-
-<div class="diff" style:--lnw={lnw}>
+<div class="diff">
   <div class="bar">
     <button class="btn sm" onclick={swap} disabled={blank} title="왼쪽과 오른쪽을 바꿉니다">⇄ 바꾸기</button>
     <span class="nav">
-      <button class="btn sm" disabled={!past.length} onclick={undo} title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">↶</button>
-      <button class="btn sm" disabled={!future.length} onclick={redo} title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행">↷</button>
+      <button class="btn sm" disabled={!hist.a.u && !hist.b.u} onmousedown={(e) => e.preventDefault()} onclick={undo} title="실행 취소 (Ctrl+Z)" aria-label="실행 취소">↶</button>
+      <button class="btn sm" disabled={!hist.a.r && !hist.b.r} onmousedown={(e) => e.preventDefault()} onclick={redo} title="다시 실행 (Ctrl+Shift+Z)" aria-label="다시 실행">↷</button>
     </span>
     <label class="opt">
       공백
@@ -574,25 +546,26 @@
     <label class="opt"><input type="checkbox" bind:checked={opts.fold} /> 같은 부분 접기</label>
     {#if json}
       <label class="opt" title="키 순서만 다른 것은 차이로 보지 않습니다"><input type="checkbox" bind:checked={opts.sortKeys} /> 키 정렬</label>
+      <button class="btn sm" disabled={blank} onclick={() => SIDES.forEach(tidy)} title="양쪽 JSON 을 같은 모양(들여쓰기 2칸{opts.sortKeys ? ', 키 정렬' : ''})으로 맞춥니다">정리</button>
     {/if}
     {#if blank}<button class="btn sm primary" onclick={sample}>예시로 보기</button>{/if}
 
     <div class="right">
       {#if notice}<span class="notice" role="status">{notice}</span>{/if}
       {#if same}
-        <span class="same" role="status" title={ignored ? `${ignored} 차이는 빼고 본 결과입니다` : ''}>✓ 두 내용이 같습니다</span>
-      {:else if result && !solo}
+        <span class="same" role="status" title={ignored ? `${ignored} 차이는 빼고 본 결과입니다` : ''}>✓ 두 내용이 같습니다{json && !rawSame && changes ? ' (형식만 다름)' : ''}</span>
+      {:else if res}
         <span class="stats" aria-label="차이 요약">
-          <span class="ins">추가 {result.added.toLocaleString('ko-KR')}</span>
-          <span class="del">삭제 {result.removed.toLocaleString('ko-KR')}</span>
-          <span class="mod">수정 {result.modified.toLocaleString('ko-KR')}</span>
+          <span class="ins">추가 {res.added.toLocaleString('ko-KR')}</span>
+          <span class="del">삭제 {res.removed.toLocaleString('ko-KR')}</span>
+          <span class="mod">수정 {res.modified.toLocaleString('ko-KR')}</span>
         </span>
       {/if}
-      {#if result && !solo}
+      {#if res}
         <span class="nav">
-          <button class="btn sm" disabled={!built.blocks.length} onclick={() => go(-1)} title="이전 차이 (Alt+↑ · Shift+F7)" aria-label="이전 차이">↑</button>
-          <span class="pos">{cur < 0 || cur >= built.blocks.length ? '–' : cur + 1} / {built.blocks.length.toLocaleString('ko-KR')}</span>
-          <button class="btn sm" disabled={!built.blocks.length} onclick={() => go(1)} title="다음 차이 (Alt+↓ · F7)" aria-label="다음 차이">↓</button>
+          <button class="btn sm" disabled={!blocks.length} onclick={() => go(-1)} title="이전 차이 (Alt+↑ · Shift+F7)" aria-label="이전 차이">↑</button>
+          <span class="pos">{cur < 0 || cur >= blocks.length ? '–' : cur + 1} / {blocks.length.toLocaleString('ko-KR')}</span>
+          <button class="btn sm" disabled={!blocks.length} onclick={() => go(1)} title="다음 차이 (Alt+↓ · F7)" aria-label="다음 차이">↓</button>
         </span>
         <button class="btn sm" disabled={!changes} onclick={copyPatch} title="git apply 로 적용할 수 있는 형식">{copied ? '복사됨' : '패치 복사'}</button>
         <button class="btn sm" disabled={!changes} onclick={savePatch}>.patch 저장</button>
@@ -601,16 +574,15 @@
   </div>
 
   <div class="frame">
-    <div class="heads" style:padding-right="{sbw + 14}px">
+    <div class="heads">
       {#each SIDES as side (side)}
-        {@const err = side === 'a' ? prepared.errA : prepared.errB}
         <div class="head h{side}">
           <b>{label[side]}</b>
-          {#if doc[side].name}<span class="name" title={doc[side].name}>{doc[side].name}</span>{/if}
-          {#if err}
-            <span class="err" title={err}>JSON 형식이 올바르지 않습니다 — {err}</span>
+          {#if names[side]}<span class="name" title={names[side]}>{names[side]}</span>{/if}
+          {#if info[side].err}
+            <span class="err" title={info[side].err}>JSON 형식이 올바르지 않습니다 — {info[side].err}</span>
           {:else}
-            <span class="meta">{lineCount(doc[side].text).toLocaleString('ko-KR')}줄</span>
+            <span class="meta">{info[side].lines.toLocaleString('ko-KR')}줄</span>
           {/if}
           <span class="acts">
             <label class="btn sm ghost">
@@ -624,110 +596,57 @@
                 }}
               />
             </label>
-            <button class="btn sm ghost" disabled={!has[side]} aria-pressed={editing[side]} onmousedown={(e) => e.preventDefault()} onclick={() => toggleEditor(side)} title="글 전체를 한 번에 고칩니다. 한 줄만 고칠 때는 그 줄을 두 번 누르세요">
-              {editing[side] && has[side] ? '완료' : '편집'}
-            </button>
-            <button class="btn sm ghost" disabled={!doc[side].text} onclick={() => saveSide(side)}>저장</button>
-            <button class="btn sm ghost" disabled={!doc[side].text} onclick={() => clear(side)}>지우기</button>
+            <button class="btn sm ghost" disabled={!info[side].chars} onclick={() => saveSide(side)}>저장</button>
+            <button class="btn sm ghost" disabled={!info[side].chars} onclick={() => clear(side)}>지우기</button>
           </span>
         </div>
         {#if side === 'a'}<div class="gap"></div>{/if}
       {/each}
+      <div></div>
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div
       class="out"
-      ondragover={(e) => {
+      ondragovercapture={(e) => {
+        if (!hasFiles(e)) return;
         e.preventDefault();
+        e.stopPropagation();
         dropSide = sideAt(e);
       }}
       ondragleave={(e) => !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node) && (dropSide = null)}
-      ondrop={(e) => {
+      ondropcapture={(e) => {
+        if (!hasFiles(e)) return;
         e.preventDefault();
+        e.stopPropagation();
         const s = sideAt(e);
         dropSide = null;
         takeFiles(s, e.dataTransfer?.files);
       }}
     >
-      <div class="body">
-        <div class="result sel-{selSide}" bind:this={scroller} onscroll={(e) => (top = e.currentTarget.scrollTop)} style:--sx={sx} tabindex="-1">
-          <div class="space" style:height="{items.length * H}px">
-            <div class="win" style:transform="translateY({start * H}px)">
-              {#each win as it, w (start + w)}
-                {#if it.k === 'fold'}
-                  <button class="fold" onclick={() => expand(it.key)}>같은 내용 {it.count.toLocaleString('ko-KR')}줄 펼치기</button>
-                {:else}
-                  {@const r = it.row}
-                  {@const blk = it.first && !solo ? built.blocks[it.block] : null}
-                  <div class="r" class:cur={it.block === cur && cur >= 0} class:chg={r.changed && !solo}>
-                    <span class="ln">{r.a === null ? '' : r.a + 1}</span>
-                    {@render cell('a', it)}
-                    <span class="gut">
-                      {#if blk}
-                        <button class="cp" onclick={() => copyBlock(blk, 'b')} title="이 차이를 오른쪽에 덮어씁니다" aria-label="오른쪽으로 복사">→</button>
-                        <button class="cp" onclick={() => copyBlock(blk, 'a')} title="이 차이를 왼쪽에 덮어씁니다" aria-label="왼쪽으로 복사">←</button>
-                      {/if}
-                    </span>
-                    <span class="ln">{r.b === null ? '' : r.b + 1}</span>
-                    {@render cell('b', it)}
-                  </div>
-                {/if}
-              {/each}
-            </div>
+      {#each SIDES as side (side)}
+        <div class="pane p{side}" class:drop={dropSide === side} bind:this={hosts[side]}>
+          {#if dropSide === side}<div class="drop-hint">여기에 놓으면 {label[side]}을 바꿉니다</div>{/if}
+        </div>
+        {#if side === 'a'}
+          <div class="gut">
+            {#each bands as b (b.i)}
+              <div class="band" class:cur={b.i === cur} style:top="{b.at * H - top}px" style:height="{b.n * H}px">
+                <button class="cp" onclick={() => copyBlock(b, 'b')} title="이 차이를 오른쪽에 덮어씁니다" aria-label="오른쪽으로 복사">→</button>
+                <button class="cp" onclick={() => copyBlock(b, 'a')} title="이 차이를 왼쪽에 덮어씁니다" aria-label="왼쪽으로 복사">←</button>
+              </div>
+            {/each}
           </div>
-        </div>
-
-        <!-- 빈 쪽 · 전체 편집 중인 쪽은 그 칸 위에 입력 칸을 띄운다 -->
-        <div class="ovl" style:right="{sbw}px">
-          {#each SIDES as side (side)}
-            <div class="slot o{side}" class:drop={dropSide === side}>
-              {#if showEditor(side)}
-                {@const nums = edNumbers(side)}
-                <div class="ed-ln" aria-hidden="true"><div style:transform="translateY({nums.y}px)">{nums.text}</div></div>
-                <textarea
-                  class="field"
-                  data-side={side}
-                  bind:value={doc[side].text}
-                  spellcheck="false"
-                  autocapitalize="off"
-                  aria-label={label[side]}
-                  placeholder={(side === 'a' ? '원본' : '바뀐 내용') + '을 붙여넣거나 파일을 끌어다 놓으세요.\n파일 두 개를 한꺼번에 놓으면 양쪽에 들어갑니다.\n\n내용은 이 브라우저 밖으로 나가지 않습니다.'}
-                  onfocus={() => {
-                    remember();
-                    editing[side] = true;
-                  }}
-                  onblur={() => {
-                    if (doc[side].text.trim()) editing[side] = false;
-                    flush();
-                  }}
-                  onkeydown={(e) => e.key === 'Escape' && e.currentTarget.blur()}
-                  onscroll={(e) => (edTop[side] = e.currentTarget.scrollTop)}
-                ></textarea>
-              {:else if dropSide === side}
-                <div class="drop-hint">여기에 놓으면 {label[side]}을 바꿉니다</div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      </div>
+        {/if}
+      {/each}
 
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
       <div class="map" onclick={onMap} title="눌러서 그 위치로 이동">
         {#each map as c, i (i)}<i class={c}></i>{/each}
-        {#if items.length * H > vh}
-          <span class="view" style:top="{(top / (items.length * H)) * 100}%" style:height="{Math.max(2, (vh / (items.length * H)) * 100)}%"></span>
+        {#if sh > vh + 1}
+          <span class="view" style:top="{(top / sh) * 100}%" style:height="{Math.max(2, (vh / sh) * 100)}%"></span>
         {/if}
       </div>
-    </div>
-
-    <div class="hbar" class:on={maxSx > 0} style:padding-right="{sbw + 14}px">
-      {#each SIDES as side, k (side)}
-        <div class="hs" bind:this={hbars[k]} onscroll={(e) => (sx = e.currentTarget.scrollLeft)}>
-          <div style:width="{maxW}px"></div>
-        </div>
-        {#if side === 'a'}<div></div>{/if}
-      {/each}
     </div>
   </div>
 </div>
@@ -744,7 +663,7 @@
     --rem-hl: color-mix(in srgb, var(--bad) 32%, var(--surface));
     --mod: #c77700;
     --gw: 40px;
-    --cols: var(--lnw) minmax(0, 1fr) var(--gw) var(--lnw) minmax(0, 1fr);
+    --cols: minmax(0, 1fr) var(--gw) minmax(0, 1fr) 14px;
   }
 
   .bar {
@@ -839,14 +758,10 @@
   .heads {
     flex: none;
     display: grid;
-    grid-template-columns: calc(var(--lnw) + (100% - 2 * var(--lnw) - var(--gw)) / 2) var(--gw) 1fr;
+    grid-template-columns: var(--cols);
     border-bottom: 1px solid var(--border);
     background: var(--surface-2);
     font-size: 13px;
-  }
-  .heads,
-  .hbar {
-    box-sizing: border-box;
   }
   .head {
     display: flex;
@@ -894,62 +809,178 @@
   .out {
     flex: 1;
     min-height: 0;
-    display: flex;
-  }
-  .body {
-    position: relative;
-    flex: 1;
-    min-width: 0;
-    display: flex;
-  }
-  .result {
-    flex: 1;
-    min-width: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-    font-family: var(--mono);
-    font-size: 12.5px;
-    line-height: 20px;
-    tab-size: 4;
-    outline: none;
-  }
-  .space {
-    position: relative;
-  }
-  .win {
-    position: absolute;
-    inset: 0 0 auto;
-  }
-  .r {
     display: grid;
     grid-template-columns: var(--cols);
-    height: 20px;
   }
-  .r.cur .gut {
-    box-shadow:
-      inset 2px 0 0 var(--app),
-      inset -2px 0 0 var(--app);
+  .pane {
+    position: relative;
+    min-width: 0;
+    min-height: 0;
   }
-  .ln {
-    padding: 0 6px 0 0;
-    text-align: right;
+  .pane.drop {
+    box-shadow: inset 0 0 0 2px var(--app);
+  }
+  .drop-hint {
+    position: absolute;
+    z-index: 5;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: var(--app);
+    color: #fff;
+    font-size: 13px;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+
+  /* ── 편집기 ── */
+  .pane :global(.cm-editor) {
+    height: 100%;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 12.5px;
+  }
+  .pane :global(.cm-editor.cm-focused) {
+    outline: none;
+  }
+  .pane :global(.cm-scroller) {
+    font-family: var(--mono);
+    line-height: 20px;
+    tab-size: 4;
+  }
+  .pane :global(.cm-content) {
+    padding: 0;
+    caret-color: var(--text);
+  }
+  .pane :global(.cm-line) {
+    padding: 0 8px;
+  }
+  .pane :global(.cm-cursor) {
+    border-left-color: var(--text);
+  }
+  .pane :global(.cm-gutters) {
+    background: var(--surface);
+    border-right: 0;
     color: var(--faint);
     font-size: 11.5px;
-    user-select: none;
-    font-variant-numeric: tabular-nums;
-    overflow: hidden;
   }
+  .pane :global(.cm-lineNumbers .cm-gutterElement) {
+    padding: 0 6px 0 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pane :global(.cm-activeLine) {
+    background: color-mix(in srgb, var(--app) 6%, transparent);
+  }
+  .pane :global(.cm-activeLineGutter) {
+    background: transparent;
+    color: var(--text);
+  }
+  .pane :global(.cm-selectionBackground) {
+    background: color-mix(in srgb, var(--app) 22%, transparent) !important;
+  }
+  .pane :global(.cm-focused .cm-selectionBackground) {
+    background: color-mix(in srgb, var(--app) 32%, transparent) !important;
+  }
+  .pane :global(.cm-selectionMatch) {
+    background: color-mix(in srgb, var(--app) 16%, transparent);
+  }
+  .pane :global(.cm-placeholder) {
+    color: var(--faint);
+  }
+  .pane :global(.cm-line.cm-del) {
+    background: var(--rem);
+  }
+  .pane :global(.cm-line.cm-ins) {
+    background: var(--add);
+  }
+  .pane :global(.cm-del .cm-chg) {
+    background: var(--rem-hl);
+    border-radius: 3px;
+  }
+  .pane :global(.cm-ins .cm-chg) {
+    background: var(--add-hl);
+    border-radius: 3px;
+  }
+  .pane :global(.cm-spacer) {
+    background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--surface-2) 5px 6.5px);
+  }
+  .pane :global(.cm-fold) {
+    display: block;
+    width: 100%;
+    height: 20px;
+    padding: 0 12px;
+    border: 0;
+    box-shadow:
+      inset 0 1px 0 var(--border),
+      inset 0 -1px 0 var(--border);
+    background: var(--surface-2);
+    color: var(--muted);
+    font-family: var(--font);
+    font-size: 12px;
+    line-height: 20px;
+    text-align: center;
+    cursor: pointer;
+  }
+  .pane :global(.cm-fold:hover) {
+    background: var(--app-soft);
+    color: var(--text);
+  }
+  .pane :global(.cm-panels) {
+    background: var(--surface-2);
+    color: var(--text);
+    border-color: var(--border);
+  }
+  .pane :global(.cm-panel.cm-search) {
+    font-family: var(--font);
+    font-size: 12px;
+  }
+  .pane :global(.cm-panel.cm-search input),
+  .pane :global(.cm-panel.cm-search button) {
+    font: inherit;
+    color: var(--text);
+  }
+  .pane :global(.cm-textfield) {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .pane :global(.cm-button) {
+    background: var(--surface);
+    background-image: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .pane :global(.cm-searchMatch) {
+    background: color-mix(in srgb, #f5c400 35%, transparent);
+  }
+  .pane :global(.cm-searchMatch-selected) {
+    background: color-mix(in srgb, #f59a00 55%, transparent);
+  }
+
+  /* ── 가운데 띠 ── */
   .gut {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 1px;
+    position: relative;
+    overflow: hidden;
     border-inline: 1px solid var(--border);
     background: var(--surface-2);
     user-select: none;
   }
-  .chg .gut {
+  .band {
+    position: absolute;
+    inset-inline: 0;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 1px;
+    padding-top: 1px;
     background: color-mix(in srgb, var(--mod) 14%, var(--surface-2));
+  }
+  .band.cur {
+    box-shadow:
+      inset 2px 0 0 var(--app),
+      inset -2px 0 0 var(--app);
   }
   .cp {
     width: 18px;
@@ -967,171 +998,9 @@
     background: var(--app);
     color: #fff;
   }
-  .tx {
-    position: relative;
-    overflow: hidden;
-    padding: 0 8px;
-    white-space: pre;
-  }
-  .tx .t {
-    display: inline-block;
-    transform: translateX(calc(var(--sx) * -1px));
-  }
-  .sel-a .tx.sb,
-  .sel-b .tx.sa {
-    user-select: none;
-  }
-  .tx.del {
-    background: var(--rem);
-  }
-  .tx.ins {
-    background: var(--add);
-  }
-  .tx.void {
-    background: repeating-linear-gradient(-45deg, transparent 0 5px, var(--surface-2) 5px 6.5px);
-  }
-  .tx :global(mark) {
-    color: inherit;
-    border-radius: 3px;
-  }
-  .tx.del :global(mark) {
-    background: var(--rem-hl);
-  }
-  .tx.ins :global(mark) {
-    background: var(--add-hl);
-  }
-  .tx.editing {
-    padding: 0;
-  }
-  .line-in {
-    width: 100%;
-    height: 20px;
-    padding: 0 7px;
-    border: 1px solid var(--app);
-    border-radius: 0;
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    outline: none;
-  }
-  .fold {
-    display: block;
-    width: 100%;
-    height: 20px;
-    padding: 0 12px;
-    border: 0;
-    box-shadow:
-      inset 0 1px 0 var(--border),
-      inset 0 -1px 0 var(--border);
-    background: var(--surface-2);
-    color: var(--muted);
-    font-family: var(--font);
-    font-size: 12px;
-    line-height: 20px;
-    text-align: center;
-  }
-  .fold:hover {
-    background: var(--app-soft);
-    color: var(--text);
-  }
-
-  .ovl {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    grid-template-columns: var(--cols);
-    pointer-events: none;
-  }
-  .slot {
-    position: relative;
-    display: flex;
-    min-width: 0;
-  }
-  .oa {
-    grid-column: 1 / 3;
-  }
-  .ob {
-    grid-column: 4 / 6;
-  }
-  .slot.drop {
-    box-shadow: inset 0 0 0 2px var(--app);
-    background: color-mix(in srgb, var(--app) 6%, transparent);
-  }
-  .ed-ln {
-    pointer-events: auto;
-    flex: none;
-    width: var(--lnw);
-    overflow: hidden;
-    background: var(--surface);
-    color: var(--faint);
-    font-family: var(--mono);
-    font-size: 11.5px;
-    line-height: 20px;
-    text-align: right;
-    white-space: pre;
-    user-select: none;
-    font-variant-numeric: tabular-nums;
-  }
-  .ed-ln > div {
-    padding-right: 6px;
-  }
-  .slot textarea {
-    padding: 0 8px;
-    pointer-events: auto;
-    flex: 1;
-    min-height: 0;
-    border: 0;
-    border-radius: 0;
-    resize: none;
-    background: var(--surface);
-    font-family: var(--mono);
-    font-size: 12.5px;
-    line-height: 20px;
-    tab-size: 4;
-    white-space: pre;
-    overflow: auto;
-    outline-offset: -2px;
-  }
-  .drop-hint {
-    margin: auto;
-    padding: 8px 14px;
-    border-radius: 999px;
-    background: var(--app);
-    color: #fff;
-    font-size: 13px;
-  }
-
-  .hbar {
-    flex: none;
-    display: grid;
-    grid-template-columns: calc(var(--lnw) + (100% - 2 * var(--lnw) - var(--gw)) / 2) var(--gw) 1fr;
-    height: 0;
-    overflow: hidden;
-  }
-  .hbar.on {
-    height: 12px;
-    border-top: 1px solid var(--border);
-  }
-  .hs {
-    margin-left: var(--lnw);
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-  .hs > div {
-    height: 1px;
-  }
-  .hs::-webkit-scrollbar {
-    height: 10px;
-  }
-  .hs::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 5px;
-  }
 
   .map {
     position: relative;
-    flex: none;
-    width: 14px;
     display: flex;
     flex-direction: column;
     border-left: 1px solid var(--border);
@@ -1189,9 +1058,11 @@
       width: 12px;
       font-size: 11px;
     }
-    .result,
-    .slot textarea {
+    .pane :global(.cm-editor) {
       font-size: 11.5px;
+    }
+    .pane :global(.cm-lineNumbers .cm-gutterElement) {
+      padding: 0 4px 0 4px;
     }
   }
 </style>

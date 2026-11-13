@@ -237,66 +237,75 @@ test('이미지 편집기', async () => {
 
 test('비교', async () => {
   const { browser, page, errors } = await open('/diff');
-  // 처음에는 양쪽 창이 입력 칸
-  assert.equal(await page.locator('.ovl textarea').count(), 2);
+  const left = page.getByLabel('원본', { exact: true });
+  const right = page.getByLabel('바뀐 내용', { exact: true });
+  // 양쪽 창은 처음부터 그냥 편집기
+  assert.equal(await page.locator('.cm-content').count(), 2);
   // 텍스트: 예시를 불러와 좌우로 맞춰 본다
   await page.getByRole('button', { name: '예시로 보기' }).click();
-  await page.locator('.result .r').first().waitFor();
-  assert.equal(await page.locator('.ovl textarea').count(), 0);
+  await page.locator('.stats').waitFor();
   assert.match(await page.locator('.stats').innerText(), /추가 4\s*삭제 0\s*수정 7/);
-  assert.ok((await page.locator('.result mark').count()) > 8);
-  assert.ok((await page.locator('.fold').count()) >= 1);
-  assert.ok((await page.locator('.tx.void').count()) > 0);
+  assert.ok((await page.locator('.cm-chg').count()) > 8);
+  assert.ok((await page.locator('.cm-spacer').count()) > 0);
+  // 같은 줄끼리 높이가 맞아 양쪽 내용 높이가 같다
+  const heights = await page.locator('.cm-content').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+  assert.ok(Math.abs(heights[0] - heights[1]) <= 20, String(heights));
   await page.screenshot({ path: `${SHOTS}/diff-text.png` });
+  // 같은 부분 접기
+  await page.locator('.opt', { hasText: '같은 부분 접기' }).locator('input').check();
+  assert.ok((await page.locator('.cm-fold').count()) >= 2);
+  await page.locator('.cm-fold').first().click();
+  await page.locator('.opt', { hasText: '같은 부분 접기' }).locator('input').uncheck();
+  assert.equal(await page.locator('.cm-fold').count(), 0);
   // 다음 차이로 이동
   await page.keyboard.press('F7');
   assert.match(await page.locator('.pos').innerText(), /^1 \//);
-  assert.ok((await page.locator('.r.cur').count()) > 0);
+  assert.ok((await page.locator('.band.cur').count()) > 0);
   // 가운데 화살표: 첫 차이를 오른쪽으로 덮어쓰면 차이가 하나 줄고, 되돌리면 돌아온다
   const blocks = Number((await page.locator('.pos').innerText()).split('/')[1].trim());
   await page.locator('.cp[aria-label="오른쪽으로 복사"]').first().click();
   await page.waitForFunction((n) => document.querySelector('.pos')?.textContent?.trim().endsWith(`/ ${n - 1}`), blocks);
-  await page.locator('.result').click({ position: { x: 5, y: 5 } });
-  await page.keyboard.press('ControlOrMeta+z');
+  await page.getByRole('button', { name: '실행 취소' }).click();
   await page.waitForFunction((n) => document.querySelector('.pos')?.textContent?.trim().endsWith(`/ ${n}`), blocks);
 
-  // 전체 편집: 같은 내용이면 같다고 알려 준다
-  await page.getByRole('button', { name: '편집' }).first().click();
-  await page.getByLabel('원본', { exact: true }).fill('hello\nworld\n');
-  await page.getByRole('button', { name: '편집' }).click();
-  await page.getByLabel('바뀐 내용', { exact: true }).fill('hello\nworld\n');
-  await page.getByLabel('바뀐 내용', { exact: true }).blur();
+  // 통째로 바꿔 넣어도, 여러 줄을 이어 쳐도 알아서 다시 비교한다
+  await left.fill('hello\nworld\n');
+  await right.fill('hello\nworld\n');
   await page.getByText('두 내용이 같습니다').waitFor();
-  assert.equal(await page.locator('.ovl textarea').count(), 0);
-  // 줄을 두 번 눌러 바로 고친다: Enter 로 줄을 나눈다
-  await page.locator('.tx.sb', { hasText: 'world' }).dblclick();
-  const line = page.locator('.line-in');
-  await line.fill('World!');
-  await line.press('End');
-  await line.press('Enter');
-  await page.locator('.line-in').fill('new');
-  await page.locator('.line-in').blur();
+  await right.click();
+  await page.keyboard.press('ControlOrMeta+End');
+  await page.keyboard.press('ArrowUp');
+  await page.keyboard.press('End');
+  await page.keyboard.type('!');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('new');
   await page.locator('.stats').waitFor();
   assert.match(await page.locator('.stats').innerText(), /추가 1\s*삭제 0\s*수정 1/);
+  assert.equal(await page.locator('.cm-line.cm-ins').count(), 2);
+  // 편집기 안 실행 취소
+  const sameShown = () => page.getByText('두 내용이 같습니다').isVisible();
+  for (let i = 0; i < 5 && !(await sameShown()); i++) {
+    await page.keyboard.press('ControlOrMeta+z');
+    await page.waitForTimeout(120);
+  }
+  assert.ok(await sameShown());
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ControlOrMeta+Shift+z');
+  await page.waitForFunction(() => /추가 1\s*삭제 0\s*수정 1/.test(document.querySelector('.stats')?.textContent ?? ''));
   // 패치 복사
   await page.getByRole('button', { name: '패치 복사' }).click();
-  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '--- a\n+++ b\n@@ -1,2 +1,3 @@\n hello\n-world\n+World!\n+new\n');
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '--- a\n+++ b\n@@ -1,2 +1,3 @@\n hello\n-world\n+world!\n+new\n');
 
   // JSON: 키 순서와 들여쓰기는 무시
   await page.getByRole('button', { name: 'JSON', exact: true }).click();
-  await page.getByRole('button', { name: '지우기' }).first().click();
-  await page.getByRole('button', { name: '지우기' }).last().click();
-  await page.getByLabel('원본', { exact: true }).fill('{"b":1,"a":[1,2]}');
-  await page.getByLabel('바뀐 내용', { exact: true }).fill('{\n  "a": [1, 2],\n  "b": 1\n}');
-  await page.getByLabel('바뀐 내용', { exact: true }).blur();
+  await left.fill('{"b":1,"a":[1,2]}');
+  await right.fill('{\n  "a": [1, 2],\n  "b": 1\n}');
   await page.getByText('두 내용이 같습니다').waitFor();
-  await page.getByRole('button', { name: '편집' }).last().click();
-  await page.getByLabel('바뀐 내용', { exact: true }).fill('{"a":[1,2],"b":');
+  await right.fill('{"a":[1,2],"b":');
   await page.getByText('JSON 형식이 올바르지 않습니다').waitFor();
   await page.getByRole('button', { name: '지우기' }).first().click();
   await page.getByRole('button', { name: '지우기' }).last().click();
   await page.getByRole('button', { name: '예시로 보기' }).click();
-  await page.locator('.result .r').first().waitFor();
+  await page.locator('.stats').waitFor();
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.screenshot({ path: `${SHOTS}/diff-json-dark.png` });
   await page.emulateMedia({ colorScheme: 'light' });
@@ -326,7 +335,7 @@ test('비교', async () => {
   await page.getByText('두 이미지가 같습니다').waitFor();
   // 모드를 오가도 입력은 남아 있다
   await page.getByRole('button', { name: '텍스트', exact: true }).click();
-  assert.ok((await page.locator('.result .r').count()) > 0);
+  assert.ok((await page.locator('.cm-line').count()) > 0);
 
   await page.setViewportSize({ width: 390, height: 780 });
   await page.waitForTimeout(200);

@@ -13,6 +13,10 @@
     "deploy": "npm run build && wrangler pages deploy build --project-name tools --branch main"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
     "decimal.js": "^10.6.0",
     "smol-toml": "^1.9.1",
     "yaml": "^2.9.1"

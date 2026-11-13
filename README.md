@@ -8,7 +8,7 @@
 | 계산기 | `/calculator` | 직접 만든 수식 파서 + 임의 정밀도 10진 연산, 공학 · 프로그래머 모드, 기록 · 메모리 |
 | 이미지 편집기 | `/image` | 벡터 주석(화살표 · 도형 · 글자 · 번호), 모자이크 · 블러, 자르기 · 크기 · 회전 · 보정, 배경 꾸미기 |
 | 추첨기 | `/raffle` | 엑셀 붙여넣기, 경품별 인원, 암호학적 난수, 전체 화면 무대(막 · 조명 · 이름 릴 · 색종이), 결과 내보내기 |
-| 비교 | `/diff` | 직접 만든 diff 엔진(Myers + patience), 좌우 정렬 편집 화면(줄 바로 고치기 · 블록 복사 · 되돌리기), 줄 · 단어 단위 강조, 패치 내보내기, JSON 정규화, 이미지 슬라이더 · 픽셀 차이 |
+| 비교 | `/diff` | 직접 만든 diff 엔진(Myers + patience), 좌우 두 창이 그대로 편집기(CodeMirror) — 고치는 대로 다시 비교 · 줄 맞춤 빈칸 · 블록 복사 · 찾기 · 되돌리기, 줄 · 단어 단위 강조, 패치 내보내기, JSON 정규화, 이미지 슬라이더 · 픽셀 차이 |
 | 화면 녹화 | `/recorder` | 화면 · 창 · 탭 녹화, 구간 · 영역 자르기, 직접 만든 GIF 인코더(공용 팔레트 + 바뀐 영역만 기록), 영상 → GIF |
 | 데이터 뷰어 | `/data` | JSON 트리 · CSV 표(보이는 줄만 그려 100만 행도 바로), 검색 · 경로 복사, 정렬 · 거르기, JSON · YAML · TOML · CSV 를 알아서 읽고 서로 변환 |
 | QR 코드 | `/qr` | 직접 만든 QR 인코더(버전 1~40), Wi-Fi · 연락처 양식, 모양 · 색 · 로고, 브라우저 인식기로 읽기 확인 |
@@ -38,7 +38,7 @@ npm run deploy     # Cloudflare Pages (프로젝트 이름: tools)
 - `src/lib/calc/` — 수식 엔진(`engine.ts`), 프로그래머 모드(`programmer.ts`).
 - `src/lib/raffle/` — 추첨 로직(`core.ts`), 무대(`Stage.svelte`), 이름 릴 움직임(`reel.ts`), 무대 조명(`backdrop.ts`), 효과음 · 색종이 · 불꽃.
 - `src/lib/image/` — 도형 모델(`shapes.ts`), 픽셀 처리(`raster.ts`), 편집기 상태(`editor.svelte.ts`).
-- `src/lib/diff/` — 비교 엔진(`core.ts`), 픽셀 비교(`image.ts`), 화면(`TextDiff.svelte`, `ImageDiff.svelte`).
+- `src/lib/diff/` — 비교 엔진(`core.ts`), 픽셀 비교(`image.ts`), 화면(`TextDiff.svelte`, `ImageDiff.svelte`), 편집기 장식(`editor.ts`).
 - `src/lib/recorder/gif.ts` — GIF 인코더 (팔레트 양자화, LZW, 프레임 차분).
 - `src/lib/data/core.ts` — 형식 판단(JSON · YAML · TOML · CSV)과 변환, CSV 파서, JSON 트리 펼치기 · 검색, 표 변환 · 정렬. YAML · TOML 읽기/쓰기는 `yaml` · `smol-toml`.
 - `src/lib/qr/` — QR 인코더(`core.ts`), 내용 양식(`payload.ts`), SVG 그리기(`render.ts`).
