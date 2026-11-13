@@ -3,6 +3,7 @@
   import ToolShell from '$lib/ui/ToolShell.svelte';
   import VirtualList from '$lib/ui/VirtualList.svelte';
   import { downloadBlob, timestamp } from '$lib/download';
+  import { sendTo } from '$lib/handoff';
   import {
     ancestors,
     csvToTable,
@@ -440,6 +441,13 @@
 
   const asText = (v: Json, pretty = true) => (typeof v === 'string' ? v : JSON.stringify(v, null, pretty ? 2 : 0));
 
+  // 비교 도구로 넘기기: 한쪽을 담아 두고, 다른 쪽에서 비교를 연다
+  let held = $state.raw<{ text: string; label: string } | null>(null);
+  function compareWith(text: string) {
+    if (!held) return;
+    if (!sendTo('/diff', { kind: 'diff', a: held.text, b: text, json: true })) say('새 탭을 열 수 없습니다. 팝업 차단을 풀어 주세요');
+  }
+
   function treeMenu(r: TreeRow): MenuItem[] {
     const box = r.size >= 0;
     const items: MenuItem[] = [{ label: box ? 'JSON 복사' : '값 복사', run: () => copy(asText(r.value), box ? 'JSON 을' : '값을') }];
@@ -469,6 +477,18 @@
           downloadBlob(new Blob([JSON.stringify(r.value, null, 2) + '\n'], { type: 'application/json' }), `${name}${part}.json`);
         },
       });
+    }
+    if (box) {
+      const label = r.key === null ? '전체' : String(r.key);
+      items.push(null);
+      items.push({
+        label: '비교할 것으로 담기',
+        run: () => {
+          held = { text: JSON.stringify(r.value, null, 2), label };
+          say(`‘${label}’ 부분을 담았습니다. 견줄 곳에서 ‘담은 것과 비교’를 고르세요`);
+        },
+      });
+      if (held) items.push({ label: `담은 것(${held.label.slice(0, 12)})과 비교 ↗`, run: () => compareWith(JSON.stringify(r.value, null, 2)) });
     }
     if (!box && String(r.value) !== '') {
       items.push(null);

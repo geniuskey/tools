@@ -3,6 +3,7 @@
   import ToolShell from '$lib/ui/ToolShell.svelte';
   import { load, save } from '$lib/storage';
   import { downloadBlob, timestamp } from '$lib/download';
+  import { receive, sendTo } from '$lib/handoff';
   import { BACKGROUNDS, COLORS, Editor } from '$lib/image/editor.svelte';
   import { blankCanvas, canvasFromBlob, canvasToBlob, captureScreen, isNeutral, NO_ADJUST, type ExportFormat } from '$lib/image/raster';
   import type { Fill, Tool } from '$lib/image/shapes';
@@ -97,6 +98,10 @@
     isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
     editor.attach(canvas);
+    // 다른 도구(화면 녹화)에서 넘어온 그림
+    receive().then((h) => {
+      if (h?.kind === 'image') openBlob(h.blob, h.name);
+    });
     const ro = new ResizeObserver(() => editor.resizeView());
     ro.observe(canvas);
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -171,6 +176,15 @@
     } finally {
       busy = false;
     }
+  }
+
+  /** 지금 그림을 일괄 변환으로 넘긴다 (목표 용량 · 다른 형식). 편집기는 그대로 남는다 */
+  function toConvert() {
+    if (!editor.hasImage) return;
+    const name = `${editor.name}.png`;
+    const ok = sendTo('/convert', canvasToBlob(editor.exportCanvas(), 'png', 1).then((blob) => ({ kind: 'image' as const, blob, name })));
+    if (!ok) editor.say('새 탭을 열 수 없습니다. 팝업 차단을 풀어 주세요');
+    saveOpen = false;
   }
 
   async function saveImage() {
@@ -361,6 +375,7 @@
             <input class="field" bind:value={editor.name} spellcheck="false" />
           </label>
           <button class="btn primary" disabled={busy} onclick={saveImage}>내려받기 <kbd>{mod}S</kbd></button>
+          <button class="btn" onclick={toConvert} title="목표 용량에 맞추거나 다른 형식으로 바꿉니다. 새 탭에서 열립니다">일괄 변환으로 보내기 ↗</button>
         </div>
       {/if}
     </div>

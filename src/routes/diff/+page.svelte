@@ -4,6 +4,7 @@
   import TextDiff from '$lib/diff/TextDiff.svelte';
   import ImageDiff from '$lib/diff/ImageDiff.svelte';
   import { load, save } from '$lib/storage';
+  import { receive } from '$lib/handoff';
 
   type Mode = 'text' | 'json' | 'image';
   const KEY = 'tools:diff:mode';
@@ -14,10 +15,17 @@
   ];
 
   let mode = $state<Mode>('text');
+  let text = $state<TextDiff>();
 
   onMount(() => {
     const m = load<Mode>(KEY, 'text');
     if (modes.some(([id]) => id === m)) mode = m;
+    // 다른 도구(데이터 뷰어)에서 넘어온 두 글
+    receive().then((h) => {
+      if (h?.kind !== 'diff') return;
+      mode = h.json ? 'json' : 'text';
+      text?.fill(h.a, h.b);
+    });
   });
 
   function pick(m: Mode) {
@@ -37,7 +45,7 @@
 
   <!-- 모드를 오가도 입력이 사라지지 않게 둘 다 살려 둔다 -->
   <div class="pane" hidden={mode === 'image'}>
-    <TextDiff json={mode === 'json'} active={mode !== 'image'} />
+    <TextDiff bind:this={text} json={mode === 'json'} active={mode !== 'image'} />
   </div>
   <div class="pane" hidden={mode !== 'image'}>
     <ImageDiff active={mode === 'image'} />

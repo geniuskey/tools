@@ -2,6 +2,7 @@
   import { onDestroy, tick } from 'svelte';
   import ToolShell from '$lib/ui/ToolShell.svelte';
   import { downloadBlob, timestamp } from '$lib/download';
+  import { sendTo } from '$lib/handoff';
   import { addToHistogram, buildPalette, GifEncoder, mapPixels, newHistogram } from '$lib/recorder/gif';
 
   type Phase = 'idle' | 'recording' | 'edit';
@@ -327,6 +328,20 @@
   const frameCount = $derived(Math.max(1, Math.round(span * fps)));
   const MAX_FRAMES = 900;
 
+  /** 지금 멈춘 장면(자른 영역만)을 이미지 편집기로 넘긴다. 녹화는 이 탭에 그대로 남는다 */
+  function frameToImage() {
+    const v = video;
+    if (!v || !vw) return;
+    v.pause();
+    const c = document.createElement('canvas');
+    c.width = geo.sw;
+    c.height = geo.sh;
+    c.getContext('2d')!.drawImage(v, geo.sx, geo.sy, geo.sw, geo.sh, 0, 0, geo.sw, geo.sh);
+    const png = new Promise<Blob>((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('png'))), 'image/png'));
+    const ok = sendTo('/image', png.then((blob) => ({ kind: 'image' as const, blob, name: `장면-${timestamp()}` })));
+    if (!ok) flash('새 탭을 열 수 없습니다. 팝업 차단을 풀어 주세요');
+  }
+
   async function seekExact(t: number) {
     const v = video!;
     v.currentTime = t;
@@ -643,6 +658,7 @@
           <button class="btn" disabled={!source} onclick={() => source && downloadBlob(source.blob, source.name)}>
             원본 저장{source ? ` (${size(source.blob.size)})` : ''}
           </button>
+          <button class="btn" disabled={!duration} onclick={frameToImage} title="지금 보이는 장면을 이미지 편집기에서 엽니다 (자른 영역만). 새 탭에서 열립니다">이 장면을 이미지 편집기로 ↗</button>
         {/if}
         {#if notice}<p class="notice" role="status">{notice}</p>{/if}
 

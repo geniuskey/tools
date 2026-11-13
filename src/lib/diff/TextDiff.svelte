@@ -97,6 +97,12 @@
     v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: text }, userEvent, scrollIntoView: false });
   }
 
+  /** 다른 도구에서 넘어온 두 글을 양쪽에 넣는다 */
+  export function fill(a: string, b: string) {
+    setText('a', a);
+    setText('b', b);
+  }
+
   // ── 비교 ──────────────────────────────────────────────────
   type RowItem = { k: 'row'; row: Row; block: number };
   type Item = { k: 'fold'; key: number; count: number; a0: number; a1: number; b0: number; b1: number } | RowItem;

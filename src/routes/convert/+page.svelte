@@ -3,6 +3,7 @@
   import ToolShell from '$lib/ui/ToolShell.svelte';
   import { load, save } from '$lib/storage';
   import { downloadBlob, timestamp } from '$lib/download';
+  import { receive } from '$lib/handoff';
   import { EXT, FORMAT_NAME, exifSummary, formatBytes, lossy, outputNames, savedPercent, zipStore, type ExifInfo, type Format, type Resize } from '$lib/convert/core';
   import { ConvertError, convert, probe, sampleFiles, supportedFormats, targetFormat, type Converted, type Settings } from '$lib/convert/pipeline';
 
@@ -214,6 +215,10 @@
   }
 
   onMount(() => {
+    // 다른 도구(이미지 편집기)에서 넘어온 그림
+    receive().then((h) => {
+      if (h?.kind === 'image') addFiles([new File([h.blob], h.name, { type: h.blob.type })]);
+    });
     const s = load<Record<string, any>>(KEY, {});
     if (['same', 'jpeg', 'png', 'webp', 'avif'].includes(s.format)) format = s.format;
     if (['none', 'long', 'fit', 'percent'].includes(s.resizeMode)) resizeMode = s.resizeMode;

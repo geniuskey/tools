@@ -401,6 +401,13 @@ test('화면 녹화', async () => {
   await page.mouse.move(box.x + box.width * 0.75, box.y + box.height * 0.8, { steps: 5 });
   await page.mouse.up();
   assert.match(await page.locator('.crop span').innerText(), /^33[0-9] × 15[0-9]$/);
+  // 지금 장면(자른 영역)을 이미지 편집기로: 새 탭에서 열리고 녹화는 그대로 남는다
+  const [shot] = await Promise.all([page.context().waitForEvent('page'), page.getByRole('button', { name: /이 장면을 이미지 편집기로/ }).click()]);
+  await shot.waitForFunction(() => /^33\d × 15\dpx/.test(document.querySelector('.status')?.textContent?.trim() ?? ''));
+  assert.equal(new URL(shot.url()).pathname, '/image');
+  await shot.waitForFunction(() => !location.hash);
+  await shot.close();
+  assert.match(await page.locator('.crop span').innerText(), /^33[0-9] × 15[0-9]$/);
   // 구간: 끝 손잡이를 당긴다
   const track = (await page.locator('.track').boundingBox())!;
   await page.mouse.move(track.x + track.width + 4, track.y + 10);
@@ -465,7 +472,7 @@ test('데이터 뷰어', async () => {
   // 줄에서 오른쪽 버튼: 복사 · 아래 펼치기 · 표로 보기
   await page.getByRole('button', { name: '모두 접기' }).click();
   await page.locator('.trow', { hasText: 'orders' }).click({ button: 'right' });
-  assert.deepEqual(await page.getByRole('menuitem').allInnerTexts(), ['JSON 복사', '한 줄로 복사', '키 복사', '키와 값 복사', '경로 복사', '표로 보기', '아래 모두 펼치기', '아래 모두 접기', '이 부분만 JSON 저장']);
+  assert.deepEqual(await page.getByRole('menuitem').allInnerTexts(), ['JSON 복사', '한 줄로 복사', '키 복사', '키와 값 복사', '경로 복사', '표로 보기', '아래 모두 펼치기', '아래 모두 접기', '이 부분만 JSON 저장', '비교할 것으로 담기']);
   await page.screenshot({ path: `${SHOTS}/data-menu.png` });
   await page.getByRole('menuitem', { name: '경로 복사' }).click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '$.orders');
@@ -1113,6 +1120,168 @@ test('텍스트', async () => {
   await browser.close();
 });
 
+test('날짜 계산기', async () => {
+  const { browser, page, errors } = await open('/date');
+  const days = page.getByTestId('gap-days');
+  const work = page.getByTestId('gap-work');
+  // 두 날짜 사이: 성탄절이 평일에 걸려 근무일이 하루 준다
+  await page.getByLabel('시작', { exact: true }).fill('2026-11-13');
+  await page.getByLabel('끝', { exact: true }).fill('2026-12-31');
+  assert.equal((await days.innerText()).replace(/\s/g, ''), '48일');
+  assert.equal((await work.innerText()).replace(/\s/g, ''), '근무일33일');
+  assert.match(await page.locator('.hol').innerText(), /12월 25일 \(금\)\s*성탄절/);
+  assert.match(await page.locator('.card').first().locator('.sub').innerText(), /6주 6일\s+1개월 18일\s+주말 14일\s+평일에 쉬는 날 1일/);
+  await page.getByLabel(/첫날도 세기/).check();
+  assert.equal((await days.innerText()).replace(/\s/g, ''), '49일');
+  assert.equal((await work.innerText()).replace(/\s/g, ''), '근무일34일');
+  await page.getByLabel(/첫날도 세기/).uncheck();
+  // 달력에 구간이 칠해지고, 누르면 끝 날짜가 바뀐다
+  assert.equal(await page.locator('.cal strong').innerText(), '2026년 12월');
+  assert.equal(await page.locator('.cell.in').count(), 33);
+  await page.getByRole('button', { name: '2026년 12월 24일 (목)' }).click();
+  assert.equal(await page.getByLabel('끝', { exact: true }).inputValue(), '2026-12-24');
+  assert.equal((await work.innerText()).replace(/\s/g, ''), '근무일29일');
+  await page.screenshot({ path: `${SHOTS}/date-calc.png` });
+
+  // 며칠 뒤: 설 연휴를 건너뛴다
+  const moved = page.getByTestId('moved');
+  await page.getByLabel('기준', { exact: true }).fill('2026-02-13');
+  await page.getByLabel('얼마나').fill('3');
+  assert.equal(await moved.innerText(), '2026년 2월 23일 (월)');
+  assert.match(await page.locator('.card').nth(1).locator('.sub').innerText(), /주말 4일, 쉬는 날 3일 \(설날\)을 건너뛰었습니다/);
+  await page.getByRole('group', { name: '뒤 또는 전' }).getByRole('button', { name: '전' }).click();
+  assert.equal(await moved.innerText(), '2026년 2월 10일 (화)');
+  await page.getByRole('group', { name: '뒤 또는 전' }).getByRole('button', { name: '뒤' }).click();
+  // 달로 더하면 없는 날은 말일로, 쉬는 날이면 앞뒤 근무일을 알려 준다
+  await page.getByLabel('기준', { exact: true }).fill('2026-01-31');
+  await page.getByLabel('단위').selectOption('month');
+  await page.getByLabel('얼마나').fill('1');
+  assert.equal(await moved.innerText(), '2026년 2월 28일 (토)');
+  const second = await page.locator('.card').nth(1).innerText();
+  assert.match(second, /31일이 없어 말일로 맞췄습니다/);
+  assert.match(second, /이 날은 토요일입니다. 앞 근무일은 2월 27일 \(금\), 다음 근무일은 3월 3일 \(화\)/);
+  // 회사가 쉬는 날을 넣으면 근무일에서 빠진다
+  await page.locator('.rules summary').click();
+  await page.getByLabel('우리 회사가 따로 쉬는 날').fill('2026-12-23 종무식\n모르는 줄');
+  assert.match(await page.locator('.rules').innerText(), /읽지 못한 줄: 모르는 줄/);
+  assert.equal((await work.innerText()).replace(/\s/g, ''), '근무일28일');
+  await page.getByLabel('토요일').uncheck();
+  assert.equal((await work.innerText()).replace(/\s/g, ''), '근무일34일');
+  await page.getByLabel('토요일').check();
+  // 기억할 날짜
+  await page.getByLabel('기억할 날짜 이름').fill('보고서 마감');
+  await page.getByLabel('언제').fill('2030-01-02');
+  await page.getByRole('button', { name: '추가' }).click();
+  assert.match(await page.locator('.ddays').innerText(), /D-[\d,]+\s+보고서 마감\s+2030년 1월 2일 \(수\) · 근무일 [\d,]+일/);
+  await page.getByRole('button', { name: '복사' }).first().click();
+  assert.match(await page.evaluate(() => navigator.clipboard.readText()), /^2026년 11월 13일 \(금\) → 2026년 12월 24일 \(목\): 41일, 근무일 28일$/);
+
+  // 공휴일: 2026년
+  await page.getByRole('button', { name: '공휴일', exact: true }).click();
+  for (let i = 0; i < 80 && (await page.locator('.year .nav h2').innerText()) !== '2026년'; i++) {
+    const y = parseInt(await page.locator('.year .nav h2').innerText());
+    await page.getByRole('button', { name: y < 2026 ? '다음 해' : '앞 해' }).click();
+  }
+  assert.equal(await page.locator('.hols tr').count(), 22);
+  assert.match(await page.locator('.hols').innerText(), /2월 17일\s+화\s+설날/);
+  assert.match(await page.locator('.hols').innerText(), /5월 25일\s+월\s+대체공휴일 \(부처님오신날\)\s*대체/);
+  assert.match(await page.locator('.era').innerText(), /병오년 · 말띠 해/);
+  assert.match(await page.locator('.runs').first().innerText(), /5일\s+2월 14일 \(토\) ~ 18일 \(수\)\s+설날/);
+  assert.match(await page.locator('.bridges').innerText(), /9일\s+2월 19일 \(목\) · 20일 \(금\)에 연차 2일/);
+  assert.equal(await page.locator('.months li').count(), 12);
+  const [ics] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /달력 파일/ }).click()]);
+  assert.equal(ics.suggestedFilename(), '공휴일-2026.ics');
+  assert.match(readFileSync(await ics.path(), 'utf8'), /DTSTART;VALUE=DATE:20260217\r\nDTEND;VALUE=DATE:20260218\r\nSUMMARY:설날\r\n/);
+  await page.screenshot({ path: `${SHOTS}/date-year.png`, fullPage: true });
+
+  // 시간대: 서울 오전 10시는 로스앤젤레스 전날 오후 5시
+  await page.getByRole('button', { name: '시간대', exact: true }).click();
+  await page.getByLabel('서울 날짜').fill('2026-11-13');
+  await page.getByLabel('시각', { exact: true }).fill('10:00');
+  assert.deepEqual(await page.getByTestId('clock').allInnerTexts(), ['오전 10:00', '오후 5:00', '오전 1:00']);
+  assert.match(await page.locator('.row').nth(1).innerText(), /11월 12일 \(목\) · 17시간 늦음/);
+  assert.match(await page.getByTestId('overlap').innerText(), /겹치는 때가 없습니다/);
+  await page.screenshot({ path: `${SHOTS}/date-zones.png` });
+  await page.getByRole('button', { name: '런던 빼기' }).click();
+  assert.match(await page.getByTestId('overlap').innerText(), /모두 근무 시간\s*서울 오전 9:00 ~ 오전 11:00 \(2시간\)/);
+  // 띠를 누르거나 화살표로 시각을 옮긴다
+  await page.getByRole('button', { name: '서울 11월 13일 (금) 오후 2:30' }).click();
+  assert.deepEqual(await page.getByTestId('clock').allInnerTexts(), ['오후 2:30', '오후 9:30']);
+  await page.getByRole('slider').focus();
+  await page.keyboard.press('ArrowRight');
+  assert.deepEqual(await page.getByTestId('clock').allInnerTexts(), ['오후 3:00', '오후 10:00']);
+  await page.getByLabel('도시 넣기').fill('berlin');
+  await page.locator('.found button').first().click();
+  assert.deepEqual(await page.getByTestId('clock').allInnerTexts(), ['오후 3:00', '오후 10:00', '오전 7:00']);
+  await page.getByRole('button', { name: '복사' }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '서울 11월 13일 (금) 오후 3:00\n샌프란시스코 · 로스앤젤레스 11월 12일 (목) 오후 10:00 (17시간 늦음)\n베를린 · 프랑크푸르트 11월 13일 (금) 오전 7:00 (8시간 늦음)');
+
+  // 음력
+  await page.getByRole('button', { name: '음력', exact: true }).click();
+  await page.getByLabel('양력 날짜').fill('2026-11-13');
+  assert.equal(await page.getByTestId('lunar').innerText(), '음력 2026년 10월 5일');
+  await page.getByLabel('음력 해').fill('2025');
+  await page.getByLabel('음력 달').selectOption('6');
+  await page.getByLabel('음력 날').selectOption('1');
+  assert.equal(await page.getByTestId('solar').innerText(), '2025년 6월 25일 (수)');
+  await page.getByLabel('윤달').check();
+  assert.equal(await page.getByTestId('solar').innerText(), '2025년 7월 25일 (금)');
+  await page.getByLabel('음력 날').selectOption('30');
+  assert.match(await page.locator('.lunar .warn').innerText(), /윤6월은 29일까지 있습니다/);
+  assert.equal(await page.locator('.yearly tr').count(), 12);
+  await page.screenshot({ path: `${SHOTS}/date-lunar.png` });
+
+  // 새로 고쳐도 남는다
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await page.getByLabel('음력 해').inputValue(), '2025');
+  await page.getByRole('button', { name: '날짜', exact: true }).click();
+  assert.equal(await page.getByLabel('끝', { exact: true }).inputValue(), '2026-12-24');
+  assert.match(await page.locator('.ddays').innerText(), /보고서 마감/);
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.screenshot({ path: `${SHOTS}/date-dark.png` });
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: `${SHOTS}/date-mobile.png`, fullPage: true });
+  await page.getByRole('button', { name: '시간대', exact: true }).click();
+  await page.screenshot({ path: `${SHOTS}/date-zones-mobile.png` });
+  assert.deepEqual(errors, []);
+  await browser.close();
+});
+
+test('도구 사이 넘기기', async () => {
+  // 이미지 편집기 → 일괄 변환
+  const { browser, page, errors } = await open('/image');
+  await page.getByRole('button', { name: '빈 캔버스' }).click();
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  const [conv] = await Promise.all([page.context().waitForEvent('page'), page.getByRole('button', { name: /일괄 변환으로 보내기/ }).click()]);
+  await conv.waitForFunction(() => document.querySelectorAll('.list li').length === 1 && !document.querySelector('.list li.stale'), null, { timeout: 30_000 });
+  assert.match(await conv.locator('.list li').innerText(), /새 캔버스\.png/);
+  assert.match(await conv.locator('.list .meta').innerText(), /1,280 × 720/);
+  await conv.close();
+  // 편집기는 그대로
+  assert.match(await page.locator('.status').innerText(), /1280 × 720px/);
+
+  // 데이터 뷰어 → 비교: 한쪽을 담고, 다른 쪽에서 비교를 연다
+  await page.goto(BASE + '/data', { waitUntil: 'networkidle' });
+  await page.getByRole('button', { name: 'JSON 예시' }).click();
+  await page.locator('.trow').first().waitFor();
+  await page.locator('.trow').first().click({ button: 'right' });
+  assert.equal(await page.getByRole('menuitem', { name: /담은 것/ }).count(), 0);
+  await page.getByRole('menuitem', { name: '비교할 것으로 담기' }).click();
+  assert.match(await page.locator('.toast').innerText(), /‘전체’ 부분을 담았습니다/);
+  await page.locator('.trow', { hasText: 'orders' }).first().click({ button: 'right' });
+  const [diff] = await Promise.all([page.context().waitForEvent('page'), page.getByRole('menuitem', { name: /담은 것\(.+\)과 비교/ }).click()]);
+  await diff.waitForFunction(() => /추가 \d+\s*삭제 \d+\s*수정 \d+/.test(document.querySelector('.stats')?.textContent ?? ''));
+  assert.equal(await diff.getByRole('button', { name: 'JSON', exact: true }).getAttribute('aria-pressed'), 'true');
+  const sides = await diff.locator('.cm-content').allInnerTexts();
+  assert.ok(sides.length === 2 && sides.every((t) => /^[{[]/.test(t.trim())), JSON.stringify(sides.map((t) => t.slice(0, 20))));
+  assert.notEqual(sides[0], sides[1]);
+  await diff.screenshot({ path: `${SHOTS}/handoff-diff.png` });
+  assert.deepEqual(errors, []);
+  await browser.close();
+});
+
 test('오프라인', async () => {
   const { browser, page } = await open('/');
   await page.evaluate(() => navigator.serviceWorker.ready);
@@ -1122,7 +1291,7 @@ test('오프라인', async () => {
     await page.goto(BASE + path, { waitUntil: 'load' });
     assert.ok(await page.locator('header').first().isVisible(), `${path} 오프라인`);
   }
-  await page.getByRole('link', { name: /계산기/ }).click();
+  await page.getByRole('link', { name: /^계산기/ }).click();
   await page.locator('input.expr').waitFor();
   await page.waitForFunction(() => document.activeElement?.classList.contains('expr'));
   await page.keyboard.type('6*7');
