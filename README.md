@@ -7,6 +7,7 @@
 | --- | --- | --- |
 | 계산기 | `/calculator` | 직접 만든 수식 파서 + 임의 정밀도 10진 연산, 공학 · 프로그래머 모드, 기록 · 메모리 |
 | 이미지 편집기 | `/image` | 벡터 주석(화살표 · 도형 · 글자 · 번호), 모자이크 · 블러, 자르기 · 크기 · 회전 · 보정, 배경 꾸미기 |
+| 이미지 일괄 변환 | `/convert` | 여러 장을 한꺼번에 JPG · PNG · WebP 로, 긴 쪽 · 비율로 크기 줄이기, 목표 용량에 맞는 품질 이분 탐색, EXIF(위치 · 기기) 읽어서 알려 주고 지우기, 앞뒤 비교, 직접 만든 ZIP 쓰기 |
 | 추첨기 | `/raffle` | 엑셀 붙여넣기, 경품별 인원, 암호학적 난수, 전체 화면 무대(막 · 조명 · 이름 릴 · 색종이), 결과 내보내기 |
 | 비교 | `/diff` | 직접 만든 diff 엔진(Myers + patience), 좌우 두 창이 그대로 편집기(CodeMirror) — 고치는 대로 다시 비교 · 줄 맞춤 빈칸 · 블록 복사 · 찾기 · 되돌리기, 줄 · 단어 단위 강조, 패치 내보내기, JSON 정규화, 이미지 슬라이더 · 픽셀 차이 |
 | 화면 녹화 | `/recorder` | 화면 · 창 · 탭 녹화, 구간 · 영역 자르기, 직접 만든 GIF 인코더(공용 팔레트 + 바뀐 영역만 기록), 영상 → GIF |
@@ -23,7 +24,7 @@
 npm install
 npm run dev        # 개발 서버
 npm run check      # 타입 검사
-npm test           # 단위 테스트 (계산 · 추첨 · 릴 · diff · GIF · CSV/JSON · QR · 타이머)
+npm test           # 단위 테스트 (계산 · 추첨 · 릴 · diff · GIF · CSV/JSON · QR · 타이머 · 이미지 변환)
 npm run build && npx vite preview --port 4317 &
 npm run e2e        # 실제 브라우저(설치된 Chrome)로 핵심 흐름 확인, 스크린샷은 e2e/screenshots
 npm run deploy     # Cloudflare Pages (프로젝트 이름: tools)
@@ -42,6 +43,7 @@ npm run deploy     # Cloudflare Pages (프로젝트 이름: tools)
 - `src/lib/recorder/gif.ts` — GIF 인코더 (팔레트 양자화, LZW, 프레임 차분).
 - `src/lib/data/core.ts` — 형식 판단(JSON · YAML · TOML · CSV)과 변환, CSV 파서, JSON 트리 펼치기 · 검색, 표 변환 · 정렬. YAML · TOML 읽기/쓰기는 `yaml` · `smol-toml`.
 - `src/lib/qr/` — QR 인코더(`core.ts`), 내용 양식(`payload.ts`), SVG 그리기(`render.ts`).
+- `src/lib/convert/` — 크기 계산 · 목표 용량 탐색 · EXIF 읽기 · ZIP 쓰기(`core.ts`), 캔버스로 읽고 다시 담기(`pipeline.ts`).
 - `src/lib/timer/` — 타이머 계산(`core.ts`), 창 사이 동기화(`store.svelte.ts`), 무대(`Stage.svelte`).
 
 SvelteKit + adapter-static 으로 정적 사이트를 만든다 (office 와 같은 구성).

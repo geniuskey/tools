@@ -11,7 +11,7 @@
 
 <svelte:head>
   <title>tools.euiyun.com — 제대로 만든 웹 도구</title>
-  <meta name="description" content="계산기, 이미지 편집기, 추첨기, 비교, 화면 녹화, 데이터 뷰어, QR 코드, 행사 타이머. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
+  <meta name="description" content="계산기, 이미지 편집기, 이미지 일괄 변환, 추첨기, 비교, 화면 녹화, 데이터 뷰어, QR 코드, 행사 타이머. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
 </svelte:head>
 
 <div class="wrap">
@@ -105,6 +105,18 @@
               <span class="pv-seg">발표 · 2 / 4</span>
               <span class="pv-time">4:59</span>
               <span class="pv-bar"><i></i></span>
+            </div>
+          {:else if t.id === 'convert'}
+            <div class="pv-conv">
+              {#each [['IMG_2041.HEIC', '4.8MB', '412KB', 9], ['제주 02.jpg', '6.1MB', '498KB', 8], ['단체사진.png', '11MB', '487KB', 5]] as [name, from, to, pct], i (i)}
+                <div>
+                  <i style:background="hsl({200 + i * 70} 60% 62%)"></i>
+                  <span>{name}</span>
+                  <del>{from}</del>
+                  <b>{to}</b>
+                  <u><s style:width="{pct}%"></s></u>
+                </div>
+              {/each}
             </div>
           {:else if t.id === 'raffle'}
             <div class="pv-raffle">
@@ -468,6 +480,58 @@
     bottom: -3px;
     width: 2px;
     background: var(--text);
+  }
+
+  /* 미리보기: 일괄 변환 */
+  .pv-conv {
+    position: absolute;
+    inset: 22px 26px auto;
+    display: grid;
+    gap: 7px;
+  }
+  .pv-conv div {
+    display: grid;
+    grid-template-columns: 26px 1fr auto auto;
+    align-items: center;
+    column-gap: 8px;
+    padding: 6px 10px 6px 6px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pv-conv i {
+    grid-row: span 2;
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+  }
+  .pv-conv span {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pv-conv del {
+    color: var(--faint);
+    font-size: 10.5px;
+  }
+  .pv-conv b {
+    color: var(--app);
+  }
+  .pv-conv u {
+    grid-column: 2 / -1;
+    height: 3px;
+    border-radius: 99px;
+    background: var(--surface-3);
+    overflow: hidden;
+  }
+  .pv-conv s {
+    display: block;
+    height: 100%;
+    background: var(--app);
   }
 
   /* 미리보기: 데이터 */

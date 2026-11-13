@@ -2,6 +2,8 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium, type Browser, type Page } from 'playwright-core';
+import { readFileSync } from 'node:fs';
+import { tools } from '../src/lib/tools';
 
 const BASE = process.env.BASE_URL ?? 'http://localhost:4317';
 const SHOTS = 'e2e/screenshots';
@@ -26,7 +28,7 @@ async function open(path: string, viewport = { width: 1440, height: 900 }, dark 
 
 test('랜딩', async () => {
   const { browser, page, errors } = await open('/');
-  assert.equal(await page.locator('a.card').count(), 8);
+  assert.equal(await page.locator('a.card').count(), tools.length);
   await page.screenshot({ path: `${SHOTS}/home.png`, fullPage: true });
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.screenshot({ path: `${SHOTS}/home-dark.png`, fullPage: true });
@@ -783,12 +785,116 @@ test('행사 타이머', async () => {
   await browser.close();
 });
 
+/** ZIP 안의 파일 이름과 크기 (가운데 목록을 읽는다) */
+function zipList(buf: Buffer): { name: string; size: number }[] {
+  const end = buf.length - 22;
+  assert.equal(buf.readUInt32LE(end), 0x06054b50);
+  const out = [];
+  let p = buf.readUInt32LE(end + 16);
+  for (let i = 0; i < buf.readUInt16LE(end + 10); i++) {
+    const n = buf.readUInt16LE(p + 28);
+    out.push({ name: buf.subarray(p + 46, p + 46 + n).toString('utf8'), size: buf.readUInt32LE(p + 24) });
+    p += 46 + n;
+  }
+  return out;
+}
+
+test('이미지 일괄 변환', async () => {
+  const { browser, page, errors } = await open('/convert');
+  await page.screenshot({ path: `${SHOTS}/convert-empty.png` });
+  const settled = () => page.waitForFunction(() => document.querySelectorAll('.list li').length > 0 && !document.querySelector('.list li.stale'), null, { timeout: 30_000 });
+  await page.getByRole('button', { name: '예시 사진' }).click();
+  await settled();
+  assert.equal(await page.locator('.list li').count(), 3);
+  // 기본: JPG, 긴 쪽 1920 이하. 작은 사진은 키우지 않는다
+  const metas = await page.locator('.list .meta').allInnerTexts();
+  assert.match(metas[0], /JPG → JPG\s+2,400 × 1,600 → 1,920 × 1,280/);
+  assert.match(metas[0], /위치 정보 지움/);
+  assert.match(metas[1], /1,200 × 1,800(?! →)/);
+  assert.match(metas[2], /PNG → JPG/);
+  assert.match(await page.locator('.bar').innerText(), /3장 · .+ → .+ −\d+%/);
+  assert.match(await page.locator('.bar .gps').innerText(), /위치 정보 1장 지움/);
+  assert.deepEqual(await page.locator('.names .to').allInnerTexts(), ['투명 배경.jpg']);
+  await page.screenshot({ path: `${SHOTS}/convert-list.png` });
+
+  // 받은 파일에는 EXIF 가 없다 (원본에는 있었다)
+  const [one] = await Promise.all([page.waitForEvent('download'), page.locator('.list li').first().getByRole('button', { name: '받기' }).click()]);
+  assert.equal(one.suggestedFilename(), '서울 나들이.jpg');
+  const jpg = readFileSync(await one.path());
+  assert.deepEqual([jpg[0], jpg[1]], [0xff, 0xd8]);
+  assert.equal(jpg.includes(Buffer.from('Exif')), false);
+  assert.equal(jpg.includes(Buffer.from('Sample Camera')), false);
+
+  // 목표 용량: 한 장씩 넘지 않는 품질을 찾는다
+  await page.getByRole('button', { name: '그대로', exact: true }).click();
+  await page.getByRole('button', { name: '목표 용량으로' }).click();
+  await page.getByRole('button', { name: '200KB' }).click();
+  await page.waitForTimeout(400);
+  await settled();
+  assert.match((await page.locator('.list .meta').allInnerTexts())[0], /품질 \d+/);
+  await page.getByLabel('앞에 붙일 말').fill('행사-');
+  const [zip] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: /모두 받기/ }).click()]);
+  assert.match(zip.suggestedFilename(), /^images-.*\.zip$/);
+  const list = zipList(readFileSync(await zip.path()));
+  assert.deepEqual(list.map((f) => f.name), ['행사-서울 나들이.jpg', '행사-노을.jpg', '행사-투명 배경.jpg']);
+  for (const f of list) assert.ok(f.size > 20_000 && f.size <= 200 * 1024, `${f.name} ${f.size}`);
+  // 아주 작은 목표는 크기도 줄여서 맞춘다
+  await page.getByLabel('목표 용량').fill('30');
+  await page.waitForTimeout(400);
+  await settled();
+  assert.match((await page.locator('.list .meta').allInnerTexts())[0], /크기도 줄임/);
+  assert.equal(await page.locator('.tag.warn').count(), 0);
+
+  // WebP 로, 번호 이름
+  await page.getByRole('button', { name: '품질로' }).click();
+  await page.getByRole('group', { name: '바꿀 형식' }).getByRole('button', { name: 'WebP' }).click();
+  await page.getByLabel('앞에 붙일 말').fill('사진');
+  await page.getByLabel('원래 이름 대신 번호 매기기').check();
+  await page.waitForTimeout(400);
+  await settled();
+  assert.deepEqual(await page.locator('.names .to').allInnerTexts(), ['사진001.webp', '사진002.webp', '사진003.webp']);
+  const [webp] = await Promise.all([page.waitForEvent('download'), page.locator('.list li').nth(2).getByRole('button', { name: '받기' }).click()]);
+  const wb = readFileSync(await webp.path());
+  assert.equal(wb.subarray(8, 12).toString(), 'WEBP');
+
+  // 앞뒤 비교
+  await page.locator('.list .thumb').first().click();
+  await page.locator('dialog.compare .swipe').waitFor();
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: `${SHOTS}/convert-compare.png` });
+  await page.locator('dialog.compare .swipe').focus();
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.locator('dialog.compare .swipe').getAttribute('aria-valuenow'), '55');
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('dialog.compare[open]').count(), 0);
+
+  // 그림이 아닌 파일은 빼고, 열지 못하는 형식은 이유를 알려 준다
+  const add = page.locator('.bar input[type=file]');
+  await add.setInputFiles({ name: 'memo.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+  await page.getByText('그림이 아닌 파일 1개는 뺐습니다').waitFor();
+  await add.setInputFiles({ name: 'IMG_0001.HEIC', mimeType: 'image/heic', buffer: Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypheic'), Buffer.alloc(64)]) });
+  await page.locator('.list li.failed').waitFor();
+  assert.match(await page.locator('.list li.failed .meta').innerText(), /HEIC/);
+  await page.locator('.list li.failed .x').click();
+  assert.equal(await page.locator('.list li').count(), 3);
+  // 설정은 다시 열어도 남는다
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await page.getByRole('group', { name: '바꿀 형식' }).getByRole('button', { name: 'WebP' }).getAttribute('aria-pressed'), 'true');
+
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.getByRole('button', { name: '예시 사진' }).click();
+  await settled();
+  await page.screenshot({ path: `${SHOTS}/convert-mobile.png` });
+  assert.deepEqual(errors, []);
+  await browser.close();
+});
+
 test('오프라인', async () => {
   const { browser, page } = await open('/');
   await page.evaluate(() => navigator.serviceWorker.ready);
   await page.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 15000 });
   await page.context().setOffline(true);
-  for (const path of ['/raffle', '/calculator', '/image', '/diff', '/recorder', '/data', '/qr', '/timer', '/']) {
+  for (const path of [...tools.map((t) => t.href), '/']) {
     await page.goto(BASE + path, { waitUntil: 'load' });
     assert.ok(await page.locator('header').first().isVisible(), `${path} 오프라인`);
   }

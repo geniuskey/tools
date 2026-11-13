@@ -36,6 +36,17 @@ export const tools: ToolInfo[] = [
     keywords: 'image screenshot editor 이미지 스크린샷 캡처 편집 모자이크 자르기 crop annotate',
   },
   {
+    id: 'convert',
+    href: '/convert',
+    name: '이미지 일괄 변환',
+    short: '형식 · 크기 · 용량 한꺼번에',
+    icon: 'M4 6.5A1.5 1.5 0 0 1 5.5 5h9A1.5 1.5 0 0 1 16 6.5v7a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 4 13.5zM8 18.5h10.5a1.5 1.5 0 0 0 1.5-1.5V9M4.5 12.5l3-3 3 3 2-2 3 3',
+    tagline: '사진 수십 장을 한 번에 줄이고 바꿉니다. 올리지 않으니 위치 정보가 새지 않습니다.',
+    color: 'var(--c-convert)',
+    features: ['JPG · PNG · WebP 로 한꺼번에', '긴 쪽 · 비율로 크기 줄이기', '목표 용량에 맞는 품질을 알아서', '위치 · 기기 정보(EXIF) 지우기 · ZIP 받기'],
+    keywords: 'convert resize compress image batch 이미지 사진 변환 일괄 용량 줄이기 압축 리사이즈 webp jpg png heic exif 위치 zip',
+  },
+  {
     id: 'raffle',
     href: '/raffle',
     name: '추첨기',
