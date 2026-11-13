@@ -13,6 +13,17 @@ export interface Segment {
 
 export type OverMode = 'count' | 'next' | 'stop';
 
+/** 발표자 화면의 배경 */
+export type Scene = 'water' | 'sand' | 'stars' | 'aurora' | 'none';
+export const SCENES: [Scene, string][] = [
+  ['water', '물'],
+  ['sand', '모래'],
+  ['stars', '별'],
+  ['aurora', '오로라'],
+  ['none', '없음'],
+];
+export const sceneOf = (v: unknown): Scene => SCENES.find(([k]) => k === v)?.[0] ?? 'water';
+
 /** 창끼리 주고받는 상태 전체 */
 export interface Shared {
   text: string;
@@ -28,6 +39,7 @@ export interface Shared {
   over: OverMode;
   sound: boolean;
   clock: boolean;
+  scene?: Scene;
   /** 지금 순서가 시각에 묶여 있으면 그 시각 (epoch ms). 멈추거나 시간을 조절하면 풀린다 (0) */
   anchor?: number;
   /** 지금 순서의 처음 길이 (ms). 진행 막대에 쓴다 */
@@ -129,7 +141,7 @@ function endOf(agenda: Segment[], i: number, from: number): { end: number; ancho
 }
 
 export function initial(text = sampleText, now = Date.now()): Shared {
-  const base: Shared = { text, index: 0, running: false, endAt: 0, left: 0, message: '', warn: 60, over: 'count', sound: true, clock: true, anchor: 0, span: 0 };
+  const base: Shared = { text, index: 0, running: false, endAt: 0, left: 0, message: '', warn: 10, over: 'count', sound: true, clock: true, scene: 'water', anchor: 0, span: 0 };
   return goto(base, parseAgenda(text), 0, now);
 }
 
@@ -236,4 +248,38 @@ export function schedule(s: Shared, agenda: Segment[], now: number): (number | n
 export function isShared(v: unknown): v is Shared {
   const o = v as Shared;
   return !!o && typeof o.text === 'string' && typeof o.index === 'number' && typeof o.running === 'boolean' && Number.isFinite(o.endAt) && Number.isFinite(o.left) && typeof o.message === 'string';
+}
+
+// 주소에 담는 설정: 순서표와 설정만 싣고, 진행 상태 (몇 번째 · 남은 시간 · 메시지) 는 싣지 않는다.
+// 기본값과 같은 설정은 빼서 주소를 짧게 둔다.
+const OVERS: OverMode[] = ['count', 'next', 'stop'];
+
+export function toQuery(s: Shared): URLSearchParams {
+  const d = initial('', 0);
+  const q = new URLSearchParams({ a: s.text });
+  if (s.warn !== d.warn) q.set('warn', String(s.warn));
+  if (s.over !== d.over) q.set('over', s.over);
+  if (sceneOf(s.scene) !== d.scene) q.set('bg', sceneOf(s.scene));
+  if (!s.sound) q.set('sound', '0');
+  if (!s.clock) q.set('clock', '0');
+  return q;
+}
+
+/** 주소의 설정을 지금 상태에 입힌다. 순서표 (a) 가 없으면 타이머 주소가 아니다. 달라진 것이 없으면 받은 상태 그대로 돌려준다 */
+export function fromQuery(q: URLSearchParams, s: Shared, now: number): Shared {
+  const text = q.get('a');
+  if (text == null) return s;
+  const d = initial('', 0);
+  const warn = Number(q.get('warn') ?? d.warn);
+  const over = q.get('over') as OverMode;
+  const want = {
+    warn: Number.isFinite(warn) && warn >= 0 ? warn : d.warn,
+    over: OVERS.includes(over) ? over : d.over,
+    scene: sceneOf(q.get('bg')),
+    sound: q.get('sound') !== '0',
+    clock: q.get('clock') !== '0',
+  };
+  const based = text === s.text ? s : retext(s, text, now);
+  const same = based === s && s.warn === want.warn && s.over === want.over && sceneOf(s.scene) === want.scene && s.sound === want.sound && s.clock === want.clock;
+  return same ? s : { ...based, ...want };
 }

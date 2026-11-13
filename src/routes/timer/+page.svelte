@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { replaceState } from '$app/navigation';
   import ToolShell from '$lib/ui/ToolShell.svelte';
   import Stage from '$lib/timer/Stage.svelte';
   import { TimerStore } from '$lib/timer/store.svelte';
   import { tone, unlock } from '$lib/raffle/sound';
-  import { adjust, advance, clockText, durationText, goto, segText, initial, parseAgenda, pause, phaseOf, remaining, retext, sampleText, schedule, start, type OverMode, type Shared } from '$lib/timer/core';
+  import { adjust, advance, clockText, durationText, fromQuery, goto, segText, initial, parseAgenda, pause, phaseOf, remaining, sceneOf, SCENES, retext, sampleText, schedule, start, toQuery, type OverMode, type Shared } from '$lib/timer/core';
 
   const store = new TimerStore();
   const s = $derived(store.s);
@@ -95,6 +96,32 @@
       else await stageEl?.requestFullscreen();
     } catch {}
   }
+  /** 지금 설정이 담긴 주소. 동료에게 보내면 같은 순서표 · 같은 설정으로 열린다 */
+  const link = $derived.by(() => {
+    const q = toQuery(s);
+    return `/timer?${display ? 'view=display&' : ''}${q}`;
+  });
+  // 주소 표시줄도 설정을 따라간다 (글자를 칠 때마다 바꾸지 않게 잠깐 기다린다)
+  $effect(() => {
+    if (!mounted) return;
+    const url = link;
+    const timer = setTimeout(() => {
+      if (url === location.pathname + location.search) return;
+      try {
+        replaceState(url, {});
+      } catch {}
+    }, 300);
+    return () => clearTimeout(timer);
+  });
+  let copied = $state(false);
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(location.origin + link);
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch {}
+  }
+
   function openDisplay() {
     window.open('/timer?view=display', 'tools-timer-display', 'popup,width=1280,height=720');
   }
@@ -119,6 +146,9 @@
     display = new URLSearchParams(location.search).get('view') === 'display';
     if (display) document.title = '발표자 화면 — 타이머';
     const stop = store.init();
+    // 받은 주소에 설정이 들어 있으면 그대로 맞춘다
+    const shared = fromQuery(new URLSearchParams(location.search), store.s, Date.now());
+    if (shared !== store.s) store.set(shared);
     draft = store.s.message;
     mounted = true;
     tick();
@@ -170,6 +200,7 @@
     message={s.message}
     clock={s.clock && mounted ? hhmm(now) : ''}
     {finished}
+    backdrop={sceneOf(s.scene)}
   />
 {/snippet}
 
@@ -182,6 +213,7 @@
 {:else}
   <ToolShell tool="timer">
     {#snippet actions()}
+      <button class="btn sm ghost" onclick={copyLink} title="순서표와 설정이 담긴 주소를 복사합니다. 받은 사람도 같은 화면으로 시작합니다. 진행 상태 (남은 시간) 는 담기지 않습니다.">{copied ? '복사했습니다' : '링크 복사'}</button>
       <button class="btn sm" onclick={openDisplay} title="프로젝터나 발표자 모니터에 띄울 창을 엽니다. 이 창에서 조작하면 함께 움직입니다.">발표자 화면 열기</button>
     {/snippet}
 
@@ -229,6 +261,14 @@
           경고 색으로 바꾸기
           <select class="field" value={s.warn} onchange={(e) => set({ ...s, warn: +e.currentTarget.value })}>
             {#each [[0, '안 함'], [10, '10초 전'], [30, '30초 전'], [60, '1분 전'], [120, '2분 전'], [300, '5분 전']] as [v, name] (v)}
+              <option value={v}>{name}</option>
+            {/each}
+          </select>
+        </label>
+        <label class="row">
+          배경
+          <select class="field" value={sceneOf(s.scene)} onchange={(e) => set({ ...s, scene: sceneOf(e.currentTarget.value) })}>
+            {#each SCENES as [v, name] (v)}
               <option value={v}>{name}</option>
             {/each}
           </select>

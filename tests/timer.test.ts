@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { adjust, advance, clockText, durationText, goto, initial, parseAgenda, parseDuration, pause, phaseOf, remaining, retext, schedule, start, targetAt, type Shared } from '../src/lib/timer/core';
+import { adjust, advance, clockText, durationText, fromQuery, goto, initial, parseAgenda, parseDuration, pause, phaseOf, remaining, retext, schedule, start, targetAt, toQuery, type Shared } from '../src/lib/timer/core';
 
 test('시간 읽기', () => {
   assert.equal(parseDuration('15'), 900);
@@ -196,4 +196,25 @@ test('시각까지 세는 순서', () => {
   // 달리는 중에 시각을 고치면 새 시각을 따른다
   const moved = retext(s, '대기 10:00까지\n여는 말 0:30\n쉬는 시간 10:30까지\n마무리 5', at(10, 15));
   assert.equal(remaining(moved, at(10, 15)), 900_000);
+});
+
+test('주소에 담는 설정', () => {
+  const mine: Shared = { ...initial('발표 15\n질의응답 5:30', 0), warn: 60, over: 'next', scene: 'sand', clock: false };
+  const q = toQuery(mine);
+  assert.equal(q.toString(), new URLSearchParams({ a: mine.text, warn: '60', over: 'next', bg: 'sand', clock: '0' }).toString());
+  // 받은 사람: 순서표와 설정이 같아지고, 처음부터 시작한다
+  const theirs = fromQuery(new URLSearchParams(q.toString()), start(initial('회의 30', 0), 0), 1000);
+  assert.deepEqual([theirs.text, theirs.warn, theirs.over, theirs.scene, theirs.sound, theirs.clock], [mine.text, 60, 'next', 'sand', true, false]);
+  assert.equal(theirs.index, 0);
+  // 기본값은 주소에 싣지 않고, 없는 설정은 기본값으로 읽는다
+  assert.equal(toQuery(initial('A 1', 0)).toString(), 'a=A+1');
+  const back = fromQuery(new URLSearchParams('a=A+1'), { ...initial('A 1', 0), warn: 300, scene: 'stars' }, 0);
+  assert.deepEqual([back.warn, back.scene], [10, 'water']);
+  // 같으면 그대로 (진행 중인 타이머를 건드리지 않는다), 타이머 주소가 아니어도 그대로
+  const running = start(mine, 0);
+  assert.equal(fromQuery(toQuery(running), running, 5000), running);
+  assert.equal(fromQuery(new URLSearchParams('view=display'), running, 5000), running);
+  // 이상한 값은 기본값으로
+  const odd = fromQuery(new URLSearchParams('a=A+1&warn=x&over=boom&bg=lava'), mine, 0);
+  assert.deepEqual([odd.warn, odd.over, odd.scene], [10, 'count', 'water']);
 });
