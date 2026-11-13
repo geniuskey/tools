@@ -58,6 +58,17 @@ export const tools: ToolInfo[] = [
     keywords: 'raffle lottery draw 추첨 뽑기 경품 행사 랜덤 제비',
   },
   {
+    id: 'team',
+    href: '/team',
+    name: '조 편성 · 사다리',
+    short: '팀 나누기 · 사다리타기',
+    icon: 'M8 11a3 3 0 1 0 0-6a3 3 0 0 0 0 6zM16.5 11a2.5 2.5 0 1 0 0-5a2.5 2.5 0 0 0 0 5zM3 19c0-2.8 2.2-5 5-5s5 2.2 5 5M14.5 14.2c.6-.2 1.3-.2 2-.2 2.5 0 4.5 2 4.5 4.5',
+    tagline: '명단을 붙여 넣으면 조를 고르게 나누고, 사다리도 탑니다. 결과는 공평하게.',
+    color: 'var(--c-team)',
+    features: ['인원은 고르게, 소속 · 성별은 섞어서', '떨어뜨릴 사람 · 같은 조에 넣을 사람', '이름을 누르면 타고 내려가는 사다리', '암호학적 난수 · 복사 · CSV'],
+    keywords: 'team group split ladder 조 편성 팀 나누기 조 짜기 사다리 사다리타기 랜덤 섞기 조장 벌칙',
+  },
+  {
     id: 'diff',
     href: '/diff',
     name: '비교',

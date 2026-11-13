@@ -11,7 +11,7 @@
 
 <svelte:head>
   <title>tools.euiyun.com — 제대로 만든 웹 도구</title>
-  <meta name="description" content="계산기, 이미지 편집기, 이미지 일괄 변환, 추첨기, 비교, 화면 녹화, 데이터 뷰어, QR 코드, 행사 타이머. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
+  <meta name="description" content="계산기, 이미지 편집기, 이미지 일괄 변환, 추첨기, 조 편성 · 사다리, 비교, 화면 녹화, 데이터 뷰어, QR 코드, 행사 타이머. 단순해 보이지만 끝까지 만든 웹 도구 모음. 설치와 가입 없이 브라우저 안에서만 동작합니다." />
 </svelte:head>
 
 <div class="wrap">
@@ -117,6 +117,20 @@
                   <u><s style:width="{pct}%"></s></u>
                 </div>
               {/each}
+            </div>
+          {:else if t.id === 'team'}
+            <div class="pv-team">
+              <svg viewBox="0 0 120 120" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <g stroke="var(--border-strong)" stroke-width="2.5">
+                  <path d="M20 8v104M60 8v104M100 8v104M20 30h40M60 52h40M20 74h40M60 94h40" />
+                </g>
+                <path d="M20 8v22h40v22h40v42h-40v18" stroke="var(--app)" stroke-width="4.5" />
+              </svg>
+              <div>
+                {#each [['1조', ['김하늘', '박민준', '이서연']], ['2조', ['최지우', '정도윤', '한수아']]] as [name, members] (name)}
+                  <section><b>{name}</b>{#each members as m (m)}<span>{m}</span>{/each}</section>
+                {/each}
+              </div>
             </div>
           {:else if t.id === 'raffle'}
             <div class="pv-raffle">
@@ -532,6 +546,43 @@
     display: block;
     height: 100%;
     background: var(--app);
+  }
+
+  /* 미리보기: 조 편성 · 사다리 */
+  .pv-team {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    grid-template-columns: 96px auto;
+    justify-content: center;
+    align-items: center;
+    gap: 18px;
+  }
+  .pv-team svg {
+    width: 96px;
+    height: 124px;
+  }
+  .pv-team div {
+    display: flex;
+    gap: 8px;
+  }
+  .pv-team section {
+    display: grid;
+    gap: 3px;
+    width: 66px;
+    padding-bottom: 6px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    font-size: 11.5px;
+    text-align: center;
+  }
+  .pv-team b {
+    padding: 3px 0;
+    background: var(--app);
+    color: var(--on-app);
   }
 
   /* 미리보기: 데이터 */

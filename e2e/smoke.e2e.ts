@@ -889,6 +889,114 @@ test('이미지 일괄 변환', async () => {
   await browser.close();
 });
 
+test('조 편성 · 사다리', async () => {
+  const { browser, page, errors } = await open('/team');
+  const people = page.getByLabel('참가자 명단');
+  // 부서 4곳 × 6명, 성별 반반
+  const rows = Array.from({ length: 24 }, (_, i) => `사람${String(i + 1).padStart(2, '0')}\t${['개발', '디자인', '영업', '인사'][i % 4]}\t${i % 8 < 4 ? '남' : '여'}`);
+  await people.fill(rows.join('\n'));
+  assert.equal(await page.locator('.people .count').innerText(), '24명');
+  assert.match(await page.locator('.inline small').innerText(), /4개 조 · 조마다 6명/);
+  await page.getByLabel('떨어뜨릴 사람').fill('사람01, 사람02, 사람03, 없는사람');
+  await page.getByLabel('같은 조에 넣을 사람').fill('사람05, 사람06');
+  assert.match(await page.locator('.alert').innerText(), /명단에 없는 이름: 없는사람/);
+  await page.getByLabel('조마다 조장 한 명 뽑기').check();
+  await page.getByRole('button', { name: '조 나누기' }).click();
+  const read = () =>
+    page.locator('.teams article').evaluateAll((els) =>
+      els.map((e) => ({
+        name: e.querySelector('h3')!.textContent!,
+        members: [...e.querySelectorAll('li')].map((li) => li.querySelector('.m-name')!.firstChild!.textContent!.trim()),
+        info: [...e.querySelectorAll('.m-info')].map((x) => x.textContent!),
+        leaders: e.querySelectorAll('.m-name i').length,
+      })),
+    );
+  for (let round = 0; round < 3; round++) {
+    const teams = await read();
+    assert.deepEqual(teams.map((t) => t.name), ['1조', '2조', '3조', '4조']);
+    assert.deepEqual(teams.map((t) => t.members.length), [6, 6, 6, 6]);
+    assert.equal(new Set(teams.flatMap((t) => t.members)).size, 24);
+    const of = (n: string) => teams.findIndex((t) => t.members.includes(n));
+    assert.equal(new Set(['사람01', '사람02', '사람03'].map(of)).size, 3, '떨어뜨리기');
+    assert.equal(of('사람05'), of('사람06'), '묶기');
+    for (const t of teams) {
+      assert.equal(t.info.filter((x) => x.endsWith('남')).length, 3, '성별 반반');
+      for (const d of ['개발', '디자인', '영업', '인사']) assert.ok([1, 2].includes(t.info.filter((x) => x.startsWith(d)).length), `${d} 고르게`);
+      assert.equal(t.leaders, 1);
+    }
+    if (round === 0) {
+      await page.waitForTimeout(900);
+      await page.screenshot({ path: `${SHOTS}/team-split.png` });
+    }
+    await page.getByRole('button', { name: '다시 섞기' }).click();
+  }
+  // 조당 인원으로, 이름 형식
+  await page.getByRole('button', { name: '조당 인원으로' }).click();
+  await page.getByLabel('조당 인원').fill('5');
+  await page.locator('.setup select').selectOption('A팀');
+  await page.getByRole('button', { name: '다시 섞기' }).click();
+  assert.deepEqual((await read()).map((t) => `${t.name}${t.members.length}`), ['A팀5', 'B팀5', 'C팀5', 'D팀5', 'E팀4']);
+  await page.getByRole('button', { name: '복사', exact: true }).click();
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(copied, /^\[A팀\] 5명\n/);
+  assert.equal(copied.split('\n').filter((l) => l.startsWith('사람')).length, 24);
+  const [csv] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'CSV 저장' }).click()]);
+  assert.equal(readFileSync(await csv.path(), 'utf8').split('\r\n').length, 25);
+  // 새로 고쳐도 결과가 남는다
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await page.locator('.teams article').count(), 5);
+
+  // 사다리
+  await page.getByRole('button', { name: '사다리', exact: true }).click();
+  await people.fill('김하늘, 이서연, 박민준, 최지우, 정도윤');
+  await page.getByLabel('사다리 결과').fill('당첨\n2등');
+  await page.getByRole('button', { name: '사다리 만들기' }).click();
+  assert.equal(await page.locator('.tops button').count(), 5);
+  assert.deepEqual(await page.locator('.bottoms span').allInnerTexts(), ['?', '?', '?', '?', '?']);
+  // 화면에 그려진 가로대만 보고 직접 타 본다 (도구의 계산과 무관한 검증)
+  const walk = (start: number) =>
+    page.evaluate((start) => {
+      const col = parseFloat(getComputedStyle(document.querySelector('.board')!).getPropertyValue('--col'));
+      const rungs = [...document.querySelectorAll('svg line.rail')]
+        .map((l) => ['x1', 'x2', 'y1', 'y2'].map((a) => +l.getAttribute(a)!))
+        .filter(([x1, x2]) => x1 !== x2)
+        .map(([x1, x2, y]) => ({ a: Math.round(x1 / col - 0.5), b: Math.round(x2 / col - 0.5), y }))
+        .sort((p, q) => p.y - q.y);
+      let c = start;
+      for (const r of rungs) c = r.a === c ? r.b : r.b === c ? r.a : c;
+      return c;
+    }, start);
+  const expected = await Promise.all([0, 1, 2, 3, 4].map(walk));
+  assert.deepEqual([...expected].sort(), [0, 1, 2, 3, 4]);
+  await page.locator('.tops button').nth(1).click();
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: `${SHOTS}/team-ladder-run.png` });
+  await page.locator('.bottoms span.hit').waitFor({ timeout: 8000 });
+  assert.equal(await page.locator('.bottoms span').nth(expected[1]).locator('small').innerText(), '이서연');
+  assert.match(await page.locator('.results .count').innerText(), /1\/5명 도착/);
+  await page.getByRole('button', { name: '모두 공개' }).click();
+  const bottoms = await page.locator('.bottoms span').allInnerTexts();
+  assert.deepEqual(bottoms.map((b) => b.split('\n')[0]), ['당첨', '2등', '꽝', '꽝', '꽝']);
+  const names = ['김하늘', '이서연', '박민준', '최지우', '정도윤'];
+  names.forEach((n, i) => assert.equal(bottoms[expected[i]].split('\n')[1], n));
+  await page.screenshot({ path: `${SHOTS}/team-ladder.png` });
+  await page.getByRole('button', { name: '결과 복사' }).click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), names.map((n, i) => `${n} → ${['당첨', '2등', '꽝', '꽝', '꽝'][expected[i]]}`).join('\n'));
+  // 사람이 너무 많으면 막는다
+  await people.fill(Array.from({ length: 31 }, (_, i) => `p${i}`).join('\n'));
+  assert.match(await page.locator('.alert').innerText(), /30명까지/);
+  assert.ok(await page.getByRole('button', { name: '새 사다리' }).isDisabled());
+  await people.fill(Array.from({ length: 30 }, (_, i) => `p${i}`).join('\n'));
+  await page.getByRole('button', { name: '새 사다리' }).click();
+  assert.equal(await page.locator('.tops button').count(), 30);
+
+  await page.setViewportSize({ width: 390, height: 780 });
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: `${SHOTS}/team-mobile.png`, fullPage: true });
+  assert.deepEqual(errors, []);
+  await browser.close();
+});
+
 test('오프라인', async () => {
   const { browser, page } = await open('/');
   await page.evaluate(() => navigator.serviceWorker.ready);
