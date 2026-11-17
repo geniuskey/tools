@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { childCredit, pensionPeriod, tableRow } from './core';
+  import { childCredit, pensionPeriod, tableRow, type Sme } from './core';
   import { mixed } from './money';
   import { RATES } from './rates';
   import { num, st, won } from './state.svelte';
@@ -13,7 +13,7 @@
           { id: 'health', name: '건강보험', v: r.health, how: `과세 월급 × ${(RATES.health.rate * 100).toFixed(3)}%` },
           { id: 'care', name: '장기요양보험', v: r.care, how: `건강보험료 × ${(RATES.health.care * 100).toFixed(4)}% ÷ ${(RATES.health.total * 100).toFixed(2)}%` },
           { id: 'employment', name: '고용보험', v: r.employment, how: `과세 월급 × ${(RATES.employment * 100).toFixed(1)}%`, off: st.noEmployment },
-          { id: 'tax', name: '근로소득세', v: r.incomeTax, how: `간이세액표 · 가족 ${st.family}명${st.children ? ` · 자녀 ${st.children}명 (−${num(childCredit(st.children))}원)` : ''}${st.ratio !== 1 ? ` · ${st.ratio * 100}%` : ''}` },
+          { id: 'tax', name: '근로소득세', v: r.incomeTax, how: `간이세액표 · 가족 ${st.family}명${st.children ? ` · 자녀 ${st.children}명 (−${num(childCredit(st.children))}원)` : ''}${st.ratio !== 1 ? ` · ${st.ratio * 100}%` : ''}${r.smeCut ? ` · 중소기업 감면 −${num(r.smeCut)}원` : ''}` },
           { id: 'local', name: '지방소득세', v: r.localTax, how: '근로소득세 × 10%' },
         ]
       : [],
@@ -37,8 +37,22 @@
   const NONTAX: [number, string][] = [
     [0, '없음'],
     [200_000, '식대 20만'],
-    [400_000, '식대 + 보육 20만'],
+    [400_000, '40만 (식대 + 보육 · 차량 중 하나)'],
+    [600_000, '60만'],
   ];
+  const SME: [Sme, string][] = [
+    ['', '안 받음'],
+    ['youth', `청년 ${RATES.sme.youth.rate * 100}%`],
+    ['other', `60세 이상 · 장애인 · 경력단절 ${RATES.sme.other.rate * 100}%`],
+  ];
+  const e = $derived(st.employer);
+  function compare() {
+    if (!st.read) return;
+    const now = { name: '지금', salary: st.unit === 'annual' ? st.salary : mixed(BigInt(st.annual)), severance: st.severance, nonTax: st.nonTax || 0 };
+    const raised = { ...now, name: '10% 인상', salary: mixed(BigInt(Math.round((st.annual * 1.1) / 10000) * 10000)) };
+    st.offers = [now, raised];
+    st.mode = 'compare';
+  }
 </script>
 
 <div class="page two">
@@ -72,7 +86,7 @@
 
     <div class="card">
       <div class="f">
-        <span>비과세 (월) <small>— 식대는 월 20만 원까지 세금 · 보험료를 떼지 않습니다</small></span>
+        <span>비과세 (월) <small>— 식대 · 6세 이하 자녀 보육수당(자녀마다) · 자가운전보조금 · 연구활동비는 각각 월 20만 원까지 세금 · 보험료를 떼지 않습니다</small></span>
         <div class="line">
           <input class="field num" type="number" min="0" step="10000" bind:value={st.nonTax} aria-label="비과세 금액" />
           <div class="chips">
@@ -102,6 +116,12 @@
         <span>원천징수 비율 <small>— 회사에 신청해 고를 수 있습니다. 적게 떼면 연말정산 때 더 냅니다</small></span>
         <div class="seg" role="group" aria-label="원천징수 비율">
           {#each [0.8, 1, 1.2] as v (v)}<button aria-pressed={st.ratio === v} onclick={() => (st.ratio = v)}>{v * 100}%</button>{/each}
+        </div>
+      </div>
+      <div class="f">
+        <span>중소기업 취업자 소득세 감면 <small>— 해마다 {num(RATES.sme.cap / 10000)}만 원까지. 청년(15~34세)은 {RATES.sme.youth.years}년, 그 밖에는 {RATES.sme.other.years}년</small></span>
+        <div class="chips" role="group" aria-label="중소기업 감면">
+          {#each SME as [v, name] (v)}<button aria-pressed={st.sme === v} onclick={() => (st.sme = v)}>{name}</button>{/each}
         </div>
       </div>
       <details>
@@ -137,6 +157,7 @@
         <button class="hero" onclick={() => st.copy(String(r.net), `${won(r.net)}를`)} title="눌러서 복사">{num(r.net)}<small>원</small></button>
         <p class="sub">
           연 {mixed(BigInt(r.net * 12))}원 쯤 · 떼는 돈 월 {won(r.deductions)} ({pct(r.deductions).toFixed(1)}%)
+          <button class="more" onclick={compare} title="연봉 비교 탭에서 지금 연봉과 10% 올린 연봉을 나란히">인상 · 이직과 비교 →</button>
         </p>
         <div class="bar" aria-hidden="true">
           <i class="net" style:width="{pct(r.net)}%"></i>
@@ -161,6 +182,37 @@
           </li>
         </ul>
       </div>
+
+      {#if e}
+        <div class="card">
+          <h2>회사가 쓰는 돈 <small>월급에 더해 회사가 내는 보험료 · 쌓아 둘 퇴직금</small></h2>
+          <div class="cost">
+            <div><span>한 달</span><b>{won(e.total)}</b></div>
+            <div><span>한 해</span><b>{mixed(BigInt(e.total * 12))}원</b></div>
+            <div><span>연봉 대비</span><b>{st.annual ? ((e.total * 12) / st.annual * 100).toFixed(1) : '0'}%</b></div>
+          </div>
+          <ul class="rows plain">
+            <li><span class="u"><b>세전 월급</b><small>{st.severance ? '연봉 ÷ 13' : '연봉 ÷ 12'}</small></span><span class="v static">{num(r.gross)}</span></li>
+            <li><span class="u"><b>4대 보험 (회사 몫)</b><small>국민연금 {num(e.pension)} · 건강 {num(e.health)} · 장기요양 {num(e.care)} · 고용 {num(e.employment)}</small></span><span class="v static">{num(e.pension + e.health + e.care + e.employment)}</span></li>
+            <li><span class="u"><b>고용안정 · 직업능력개발</b><small>과세 월급 × {((RATES.employer.stability[st.firm]?.[1] ?? 0) * 100).toFixed(2)}% · 회사만 냅니다</small></span><span class="v static">{num(e.stability)}</span></li>
+            <li><span class="u"><b>산재보험</b><small>과세 월급 × {st.accident}% · 업종마다 다르고 회사만 냅니다</small></span><span class="v static">{num(e.accident)}</span></li>
+            <li><span class="u"><b>퇴직금 적립</b><small>한 해에 한 달 치 월급 (세전 월급 ÷ 12)</small></span><span class="v static">{num(e.severance)}</span></li>
+          </ul>
+          <div class="line">
+            <label class="f grow">
+              <span>회사 규모</span>
+              <select class="field" bind:value={st.firm}>
+                {#each RATES.employer.stability as [name], i (name)}<option value={i}>{name}</option>{/each}
+              </select>
+            </label>
+            <label class="f">
+              <span>산재보험료율 (%)</span>
+              <input class="field num" type="number" min="0" max="30" step="0.01" bind:value={st.accident} />
+            </label>
+          </div>
+          <p class="hint">산재보험료율 {(RATES.employer.accident * 100).toFixed(2)}%는 {RATES.year}년 전체 평균입니다. 사무직 위주 업종은 0.6~0.7%쯤이고, 제조 · 건설은 더 높습니다.</p>
+        </div>
+      {/if}
 
       <div class="card">
         <h2>어떻게 계산했나</h2>
@@ -313,6 +365,9 @@
   .rows li {
     grid-template-columns: auto minmax(0, 1fr) auto !important;
   }
+  .rows.plain li {
+    grid-template-columns: minmax(0, 1fr) auto !important;
+  }
   .rows li.off {
     opacity: 0.55;
   }
@@ -341,9 +396,10 @@
   }
   /* 좁은 화면: 금액 → 답 → 나머지 */
   @media (max-width: 860px) {
+    /* 페이지의 .col { display: grid } 보다 앞서야 한다 */
     .pane,
     .results {
-      display: contents;
+      display: contents !important;
     }
     .ask {
       order: 1;
@@ -354,6 +410,43 @@
     .pane > :global(*:not(.ask)) {
       order: 3;
     }
+  }
+  .more {
+    margin-left: 6px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: 12.5px;
+    font-weight: 650;
+    color: var(--app);
+  }
+  .more:hover {
+    text-decoration: underline;
+  }
+  .cost {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .cost div {
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--surface-2);
+  }
+  .cost span {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .cost b {
+    font-size: 17px;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .grow {
+    flex: 1;
+    min-width: 180px;
   }
   .warn {
     padding: 8px 10px;

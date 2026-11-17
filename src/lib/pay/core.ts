@@ -141,7 +141,11 @@ export interface Input {
   noPension?: boolean;
   /** 고용보험을 내지 않는 사람 (만 65세 이후 새로 고용 등) */
   noEmployment?: boolean;
+  /** 중소기업 취업자 소득세 감면: 청년 90% · 그 밖에 70% */
+  sme?: Sme;
 }
+
+export type Sme = '' | 'youth' | 'other';
 
 export interface Result {
   /** 세전 월급 */
@@ -154,6 +158,8 @@ export interface Result {
   care: number;
   employment: number;
   incomeTax: number;
+  /** 중소기업 감면으로 덜 뗀 소득세 (incomeTax 는 감면 뒤 값) */
+  smeCut: number;
   localTax: number;
   deductions: number;
   net: number;
@@ -167,10 +173,53 @@ export function monthly(i: Input): Result {
   const h = health(taxable);
   const c = care(h);
   const e = i.noEmployment ? 0 : employment(taxable);
-  const tax = incomeTax(taxable, Math.max(1, i.family), Math.min(i.children, Math.max(0, i.family - 1)), i.ratio);
+  const full = incomeTax(taxable, Math.max(1, i.family), Math.min(i.children, Math.max(0, i.family - 1)), i.ratio);
+  const smeCut = smeReduction(full, i.sme);
+  const tax = full - smeCut;
   const local = floorTo(tax * RATES.localTax, 10);
   const deductions = p + h + c + e + tax + local;
-  return { gross, taxable, nonTax, pension: p, health: h, care: c, employment: e, incomeTax: tax, localTax: local, deductions, net: gross - deductions };
+  return { gross, taxable, nonTax, pension: p, health: h, care: c, employment: e, incomeTax: tax, smeCut, localTax: local, deductions, net: gross - deductions };
+}
+
+/** 중소기업 취업자 감면으로 이 달 덜 떼는 소득세. 해마다 한도가 있어 달마다 한도의 1/12 까지로 고르게 본다 */
+export function smeReduction(tax: number, sme: Sme = ''): number {
+  if (!sme) return 0;
+  const s = RATES.sme;
+  const rate = sme === 'youth' ? s.youth.rate : s.other.rate;
+  return floorTo(Math.min(tax * rate, s.cap / 12), 10);
+}
+
+// ── 회사가 내는 돈 ───────────────────────────────────────────
+
+export interface Employer {
+  pension: number;
+  health: number;
+  care: number;
+  /** 고용보험 실업급여 몫 (근로자와 같다) */
+  employment: number;
+  /** 고용안정 · 직업능력개발 (회사만) */
+  stability: number;
+  /** 산재보험 (회사만) */
+  accident: number;
+  insurance: number;
+  /** 퇴직금으로 쌓아 둘 돈: 한 해에 한 달 치 */
+  severance: number;
+  /** 월급 + 회사 몫 보험 + 퇴직금 */
+  total: number;
+}
+
+/** 이 월급을 주려고 회사가 한 달에 쓰는 돈. stability · accident 는 비율 */
+export function employerCost(r: Result, i: Pick<Input, 'noEmployment'>, stability: number, accident: number): Employer {
+  const pension = r.pension;
+  const health = r.health;
+  const care = r.care;
+  const employment = i.noEmployment ? 0 : r.employment;
+  const st = floorTo(r.taxable * stability, 10);
+  const acc = floorTo(r.taxable * accident, 10);
+  const insurance = pension + health + care + employment + st + acc;
+  // 한 해 퇴직금 ≈ 한 달 치 월급. 퇴직금 포함 연봉이면 연봉 ÷ 13 이 그 몫이라 결국 같은 식이다
+  const severance = Math.floor(r.gross / 12);
+  return { pension, health, care, employment, stability: st, accident: acc, insurance, severance, total: r.gross + insurance + severance };
 }
 
 /** 월 실수령액이 target 이 되려면 연봉이 얼마여야 하나 (만 원 단위로 가장 작은 값). 못 찾으면 null */

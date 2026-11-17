@@ -1,6 +1,7 @@
 <script lang="ts">
   import { contract, english, englishCheque, formal, grouped, hanja, korean, mixed, parseMoney, rough, vatFromSupply, vatFromTotal } from './money';
   import { st } from './state.svelte';
+  import { grossFor, withhold } from './withhold';
 
   const read = $derived(parseMoney(st.words));
   const v = $derived(read?.value ?? null);
@@ -24,6 +25,8 @@
         ],
   );
   const vat = $derived(v === null || big ? null : st.vatFrom === 'supply' ? vatFromSupply(v) : vatFromTotal(v));
+  const small = $derived(v !== null && !big && v < 10n ** 15n ? Number(v) : null);
+  const wh = $derived(small === null ? null : withhold(st.wFrom === 'gross' ? small : grossFor(small, st.wKind), st.wKind));
   const EXAMPLES = ['1,000,000', '35,000', '1억 2,345만', '4.5천만', '일금 일백만원정', '壹萬圓'];
 </script>
 
@@ -65,6 +68,34 @@
           {/each}
         </ul>
         <p class="hint">{st.vatFrom === 'supply' ? '부가세는 원 아래를 버립니다.' : '공급가액은 합계 ÷ 1.1 을 반올림하고, 부가세는 합계에서 뺀 나머지라 합계가 꼭 맞습니다.'}</p>
+      {/if}
+    </div>
+
+    <div class="card">
+      <h2>원천징수 <small>프리랜서 · 강사료 · 원고료</small></h2>
+      <div class="seg" role="group" aria-label="소득 종류">
+        <button aria-pressed={st.wKind === 'business'} onclick={() => (st.wKind = 'business')}>사업소득 3.3%</button>
+        <button aria-pressed={st.wKind === 'other'} onclick={() => (st.wKind = 'other')}>기타소득 8.8%</button>
+      </div>
+      <div class="seg" role="group" aria-label="적은 금액이">
+        <button aria-pressed={st.wFrom === 'gross'} onclick={() => (st.wFrom = 'gross')}>주는 돈이다 (세전)</button>
+        <button aria-pressed={st.wFrom === 'net'} onclick={() => (st.wFrom = 'net')}>받을 돈이다 (세후)</button>
+      </div>
+      {#if wh}
+        <ul class="rows">
+          {#each [['지급액', wh.gross], ['소득세', wh.incomeTax], ['지방소득세', wh.localTax], ['실수령액', wh.net]] as const as [name, x] (name)}
+            <li>
+              <span class="u"><b>{name}</b><small>{korean(BigInt(x), { one: st.one })}원</small></span>
+              <button class="v" onclick={() => st.copy(String(x), `${name} ${grouped(BigInt(x))}원을`)}>{grouped(BigInt(x))}</button>
+            </li>
+          {/each}
+        </ul>
+        <p class="hint">
+          {st.wKind === 'business'
+            ? '계속 · 반복해서 하는 일의 대가(프리랜서 · 강사)는 사업소득으로 3% + 지방 0.3%를 뗍니다.'
+            : '어쩌다 한 번 받는 강연료 · 원고료 · 심사료는 기타소득으로, 60%를 필요경비로 빼고 20% + 지방 2%를 뗍니다. 한 번에 125,000원 이하면 떼지 않습니다.'}
+          세금은 10원 미만을 버립니다.
+        </p>
       {/if}
     </div>
   </section>

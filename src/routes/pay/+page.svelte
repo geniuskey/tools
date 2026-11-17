@@ -6,6 +6,9 @@
   import Net from '$lib/pay/Net.svelte';
   import SalaryTable from '$lib/pay/SalaryTable.svelte';
   import Words from '$lib/pay/Words.svelte';
+  import Compare from '$lib/pay/Compare.svelte';
+  import Hourly from '$lib/pay/Hourly.svelte';
+  import Severance from '$lib/pay/Severance.svelte';
 
   const KEY = 'tools:pay:v1';
   let ready = $state(false);
@@ -21,6 +24,11 @@
     const snap = st.snapshot();
     if (ready) save(KEY, snap);
   });
+  // 지금 탭을 주소에 남겨 둔다 (그대로 공유 · 새로 고침)
+  $effect(() => {
+    const m = st.mode;
+    if (ready && location.hash.slice(1) !== m) history.replaceState(history.state, '', m === 'net' ? location.pathname : `#${m}`);
+  });
 
   function forget() {
     st.reset();
@@ -30,10 +38,14 @@
     st.say('저장한 값을 지우고 처음 값으로 돌렸습니다');
   }
 
+  function onhashchange() {
+    const tab = location.hash.slice(1) || 'net';
+    if (MODES.some(([m]) => m === tab)) st.mode = tab as typeof st.mode;
+  }
   const typing = (t: EventTarget | null) => t instanceof Element && !!t.closest('input, textarea, select, [contenteditable]');
   function onkeydown(e: KeyboardEvent) {
     if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
-    const i = ['1', '2', '3'].indexOf(e.key);
+    const i = MODES.findIndex((_, k) => String(k + 1) === e.key);
     if (i >= 0) {
       e.preventDefault();
       st.mode = MODES[i][0];
@@ -41,11 +53,11 @@
   }
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window {onkeydown} {onhashchange} />
 
 <ToolShell tool="pay">
   {#snippet actions()}
-    <div class="seg" role="group" aria-label="무엇을 할까">
+    <div class="seg modes" role="group" aria-label="무엇을 할까">
       {#each MODES as [id, name], i (id)}<button aria-pressed={st.mode === id} onclick={() => (st.mode = id)} title="{name} ({i + 1})">{name}</button>{/each}
     </div>
   {/snippet}
@@ -55,8 +67,14 @@
       <div></div>
     {:else if st.mode === 'net'}
       <Net />
+    {:else if st.mode === 'compare'}
+      <Compare />
     {:else if st.mode === 'table'}
       <SalaryTable />
+    {:else if st.mode === 'hourly'}
+      <Hourly />
+    {:else if st.mode === 'severance'}
+      <Severance />
     {:else}
       <Words />
     {/if}
@@ -71,6 +89,24 @@
 </ToolShell>
 
 <style>
+  .modes {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .modes::-webkit-scrollbar {
+    display: none;
+  }
+  .modes button {
+    flex: none;
+    white-space: nowrap;
+  }
+  @media (max-width: 720px) {
+    .modes button {
+      padding: 0 9px;
+      font-size: 12.5px;
+    }
+  }
   .stored {
     max-width: 1180px;
     margin: 0 auto;

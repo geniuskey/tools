@@ -23,7 +23,7 @@
   const cells = (r: (typeof rows)[number]) => [r.annual, r.gross, r.pension, r.health, r.care, r.employment, r.incomeTax, r.localTax, r.deductions, r.net, r.net * 12];
   const tsv = () => [HEAD, ...rows.map((r) => cells(r).map(String))].map((r) => r.join('\t')).join('\n') + '\n';
   const conds = $derived(
-    [`가족 ${st.family}명`, st.children ? `자녀 ${st.children}명` : '', `비과세 월 ${num(st.nonTax || 0)}원`, st.severance ? '퇴직금 포함' : '', st.ratio !== 1 ? `원천징수 ${st.ratio * 100}%` : ''].filter(Boolean).join(' · '),
+    [`가족 ${st.family}명`, st.children ? `자녀 ${st.children}명` : '', `비과세 월 ${num(st.nonTax || 0)}원`, st.severance ? '퇴직금 포함' : '', st.ratio !== 1 ? `원천징수 ${st.ratio * 100}%` : '', st.sme ? '중소기업 감면' : ''].filter(Boolean).join(' · '),
   );
   function pick(a: number) {
     st.unit = 'annual';

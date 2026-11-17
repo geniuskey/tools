@@ -96,11 +96,73 @@ test('연봉 · 금액: 금액 한글 표기 · 부가세', async () => {
   assert.deepEqual(errors, []);
 });
 
+test('연봉 · 금액: 중소기업 감면 · 회사가 쓰는 돈 · 연봉 비교', async () => {
+  const { page, errors } = await open('/pay');
+  await page.getByLabel('연봉', { exact: true }).fill('4500만');
+  const row = (name: string) => page.locator('.rows li', { has: page.locator('b', { hasText: new RegExp(`^${name}$`) }) }).locator('.v');
+  await page.getByRole('button', { name: '청년 90%' }).click();
+  const tax = Number((await row('근로소득세').innerText()).replace(/,/g, ''));
+  assert.ok(tax < 132_110 * 0.2, String(tax));
+  await page.getByText('회사가 쓰는 돈').first().waitFor();
+  await page.screenshot({ path: `${SHOTS}/pay-net-employer.png`, fullPage: true });
+
+  // 실수령액 → 비교: 지금과 10% 인상
+  await page.getByRole('button', { name: '인상 · 이직과 비교 →' }).click();
+  await page.locator('.say').waitFor();
+  assert.match(await page.locator('.say').innerText(), /세전으로 한 해 450만원/);
+  assert.equal(await page.evaluate(() => location.hash), '#compare');
+  await page.getByRole('button', { name: '+20%' }).click();
+  assert.equal(await page.locator('thead th .name').count(), 3);
+  await page.getByLabel('20% 인상 연봉').fill('6000만');
+  await page.getByText('60,000,000원').waitFor();
+  await page.screenshot({ path: `${SHOTS}/pay-compare.png` });
+  await page.getByRole('button', { name: '20% 인상 빼기' }).click();
+  assert.equal(await page.locator('thead th .name').count(), 2);
+  assert.deepEqual(errors, []);
+});
+
+test('연봉 · 금액: 시급 · 퇴직금 · 3.3%', async () => {
+  const { page, errors } = await open('/pay#hourly');
+  const hero = page.locator('.hero-card .hero');
+  assert.equal(await hero.innerText(), '2,156,880원');
+  await page.getByRole('button', { name: '1일', exact: true }).click();
+  await page.locator('.rows li', { hasText: '주휴수당' }).getByText('15시간 미만').waitFor();
+  await page.getByRole('button', { name: '3.3% (프리랜서)' }).click();
+  await page.getByText('소득세 3%').waitFor();
+  await page.screenshot({ path: `${SHOTS}/pay-hourly.png` });
+
+  await page.keyboard.press('5');
+  await page.getByLabel('입사일').fill('2016-11-18');
+  await page.getByLabel(/마지막 근무일/).fill('2026-11-17');
+  await page.getByLabel(/퇴직 전 3개월 월 임금/).fill('4000000');
+  await page.getByText('퇴직소득세', { exact: false }).first().waitFor();
+  const pay = Number((await hero.innerText()).replace(/\D/g, ''));
+  assert.ok(pay > 39_000_000 && pay < 41_000_000, String(pay));
+  await page.screenshot({ path: `${SHOTS}/pay-severance.png` });
+  await page.getByLabel('입사일').fill('2026-01-01');
+  await page.getByText('1년(365일)을 채우지 못해').waitFor();
+
+  await page.locator('body').click({ position: { x: 5, y: 300 } });
+  await page.keyboard.press('6'); // 숫자 키로 탭
+  await page.getByLabel('금액', { exact: true }).fill('1000000');
+  await page.getByRole('button', { name: '받을 돈이다 (세후)' }).click();
+  const gross = page.locator('.rows li', { has: page.locator('b', { hasText: /^지급액$/ }) }).locator('.v');
+  assert.equal(await gross.innerText(), '1,034,120');
+  assert.deepEqual(errors, []);
+});
+
 test('연봉 · 금액: 좁은 화면 · 어두운 화면', async () => {
   const { page, errors } = await open('/pay', { width: 390, height: 844 }, true);
   await page.locator('.hero-card').waitFor();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   assert.ok(overflow <= 0, `가로로 ${overflow}px 넘친다`);
   await page.screenshot({ path: `${SHOTS}/pay-mobile-dark.png`, fullPage: true });
+  for (const tab of ['compare', 'hourly', 'severance', 'words']) {
+    await page.goto(`${BASE}/pay#${tab}`, { waitUntil: 'networkidle' });
+    await page.locator('.card').first().waitFor();
+    const o = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert.ok(o <= 0, `${tab}: 가로로 ${o}px 넘친다`);
+    await page.screenshot({ path: `${SHOTS}/pay-mobile-${tab}.png`, fullPage: true });
+  }
   assert.deepEqual(errors, []);
 });

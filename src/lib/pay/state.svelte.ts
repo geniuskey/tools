@@ -1,14 +1,32 @@
 // 탭이 같이 쓰는 상태: 급여 조건은 실수령액 · 연봉표가 함께 쓴다.
-import { annualFor, monthly, thisMonth, type Input } from './core';
+import { annualFor, employerCost, monthly, thisMonth, type Input, type Sme } from './core';
 import { parseMoney } from './money';
 import { RATES } from './rates';
 
-export type Mode = 'net' | 'table' | 'words';
+export type Mode = 'net' | 'compare' | 'table' | 'hourly' | 'severance' | 'words';
 export const MODES: [Mode, string][] = [
   ['net', '실수령액'],
+  ['compare', '연봉 비교'],
   ['table', '연봉표'],
-  ['words', '금액 한글 표기'],
+  ['hourly', '시급 · 알바'],
+  ['severance', '퇴직금'],
+  ['words', '금액 표기'],
 ];
+
+export interface Offer {
+  name: string;
+  salary: string;
+  severance: boolean;
+  nonTax: number;
+}
+export const MAX_OFFERS = 5;
+
+export type HourlyTax = 'none' | 'business' | 'insurance';
+
+const pad = (n: number) => String(n).padStart(2, '0');
+const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const today = new Date();
+const threeYearsAgo = new Date(today.getFullYear() - 3, today.getMonth(), today.getDate());
 
 export interface Read {
   value: number;
@@ -47,6 +65,28 @@ class PayState {
   words = $state('123456789');
   one = $state(true);
   vatFrom = $state<'supply' | 'total'>('supply');
+  sme = $state<Sme>('');
+  firm = $state(0);
+  /** 산재보험료율 (%) */
+  accident = $state(RATES.employer.accident * 100);
+  offers = $state<Offer[]>([
+    { name: '지금', salary: '4,500만', severance: false, nonTax: RATES.nonTax.meal },
+    { name: '제안', salary: '5,000만', severance: false, nonTax: RATES.nonTax.meal },
+  ]);
+  hWage = $state(RATES.minWage.hourly);
+  hDay = $state(8);
+  hDays = $state(5);
+  hNight = $state(0);
+  hFive = $state(true);
+  hTax = $state<HourlyTax>('none');
+  sStart = $state(ymd(threeYearsAgo));
+  sLast = $state(ymd(today));
+  /** 퇴직 전 3개월 월 임금. 비우면 실수령액 탭의 세전 월급을 쓴다 */
+  sMonthly = $state<number | null>(null);
+  sBonus = $state(0);
+  sLeave = $state(0);
+  wKind = $state<'business' | 'other'>('business');
+  wFrom = $state<'gross' | 'net'>('gross');
   toast = $state('');
   month = thisMonth();
 
@@ -62,10 +102,12 @@ class PayState {
     month: this.month,
     noPension: this.noPension,
     noEmployment: this.noEmployment,
+    sme: this.sme,
   });
   result = $derived(this.read ? monthly({ ...this.base, annual: this.annual }) : null);
   targetRead = $derived(readSalary(this.target, 'monthly'));
   needed = $derived(this.targetRead ? annualFor(this.targetRead.value, this.base) : null);
+  employer = $derived(this.result ? employerCost(this.result, this.base, RATES.employer.stability[this.firm]?.[1] ?? 0, (this.accident || 0) / 100) : null);
 
   say(msg: string) {
     this.toast = msg;
@@ -97,6 +139,23 @@ class PayState {
       words: this.words,
       one: this.one,
       vatFrom: this.vatFrom,
+      sme: this.sme,
+      firm: this.firm,
+      accident: this.accident,
+      offers: this.offers.map((o) => ({ ...o })),
+      hWage: this.hWage,
+      hDay: this.hDay,
+      hDays: this.hDays,
+      hNight: this.hNight,
+      hFive: this.hFive,
+      hTax: this.hTax,
+      sStart: this.sStart,
+      sLast: this.sLast,
+      sMonthly: this.sMonthly,
+      sBonus: this.sBonus,
+      sLeave: this.sLeave,
+      wKind: this.wKind,
+      wFrom: this.wFrom,
     };
   }
   /** 처음 값으로 */
@@ -116,6 +175,32 @@ class PayState {
     if ([0.8, 1, 1.2].includes(s.ratio)) this.ratio = s.ratio;
     if ([1_000_000, 5_000_000, 10_000_000].includes(s.step)) this.step = s.step;
     if (s.vatFrom === 'supply' || s.vatFrom === 'total') this.vatFrom = s.vatFrom;
+    if (['', 'youth', 'other'].includes(s.sme)) this.sme = s.sme;
+    if (Number.isInteger(s.firm) && s.firm >= 0 && s.firm < RATES.employer.stability.length) this.firm = s.firm;
+    const n = (v: unknown, lo: number, hi: number) => typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi;
+    if (n(s.accident, 0, 30)) this.accident = s.accident;
+    if (Array.isArray(s.offers) && s.offers.length) {
+      const list = s.offers
+        .slice(0, MAX_OFFERS)
+        .filter((o: any) => o && typeof o.salary === 'string')
+        .map((o: any) => ({
+          name: typeof o.name === 'string' ? o.name.slice(0, 30) : '',
+          salary: o.salary.slice(0, 200),
+          severance: o.severance === true,
+          nonTax: n(o.nonTax, 0, 1e8) ? o.nonTax : 0,
+        }));
+      if (list.length) this.offers = list;
+    }
+    if (n(s.hWage, 0, 1e7)) this.hWage = s.hWage;
+    if (n(s.hDay, 0, 24)) this.hDay = s.hDay;
+    if (Number.isInteger(s.hDays) && n(s.hDays, 0, 7)) this.hDays = s.hDays;
+    if (n(s.hNight, 0, 168)) this.hNight = s.hNight;
+    if (typeof s.hFive === 'boolean') this.hFive = s.hFive;
+    if (['none', 'business', 'insurance'].includes(s.hTax)) this.hTax = s.hTax;
+    for (const k of ['sStart', 'sLast'] as const) if (typeof s[k] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s[k])) this[k] = s[k];
+    for (const k of ['sMonthly', 'sBonus', 'sLeave'] as const) if (n(s[k], 0, 1e11)) this[k] = s[k];
+    if (s.wKind === 'business' || s.wKind === 'other') this.wKind = s.wKind;
+    if (s.wFrom === 'gross' || s.wFrom === 'net') this.wFrom = s.wFrom;
   }
 }
 
