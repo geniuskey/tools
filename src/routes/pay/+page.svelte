@@ -22,6 +22,14 @@
     if (ready) save(KEY, snap);
   });
 
+  function forget() {
+    st.reset();
+    try {
+      localStorage.removeItem(KEY);
+    } catch {}
+    st.say('저장한 값을 지우고 처음 값으로 돌렸습니다');
+  }
+
   const typing = (t: EventTarget | null) => t instanceof Element && !!t.closest('input, textarea, select, [contenteditable]');
   function onkeydown(e: KeyboardEvent) {
     if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -52,11 +60,38 @@
     {:else}
       <Words />
     {/if}
+    {#if ready}
+      <p class="stored">
+        적은 금액과 조건은 이 브라우저에만 저장되어 다음에 열 때 그대로 나옵니다. 서버로는 보내지 않습니다.
+        <button onclick={forget}>저장한 값 지우기</button>
+      </p>
+    {/if}
   </div>
   {#if st.toast}<p class="toast" role="status">{st.toast}</p>{/if}
 </ToolShell>
 
 <style>
+  .stored {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 2px 16px 24px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--faint);
+  }
+  .stored button {
+    margin-left: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font-size: 12px;
+    color: var(--muted);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .stored button:hover {
+    color: var(--text);
+  }
   .pay {
     flex: 1;
     min-height: 0;

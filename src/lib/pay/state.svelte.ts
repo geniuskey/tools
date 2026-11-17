@@ -99,6 +99,12 @@ class PayState {
       vatFrom: this.vatFrom,
     };
   }
+  /** 처음 값으로 */
+  reset() {
+    const mode = this.mode;
+    this.restore(DEFAULTS);
+    this.mode = mode;
+  }
   restore(s: Record<string, any>) {
     if (MODES.some(([m]) => m === s.mode)) this.mode = s.mode;
     for (const k of ['salary', 'target', 'words'] as const) if (typeof s[k] === 'string') this[k] = s[k].slice(0, 200);
@@ -114,6 +120,7 @@ class PayState {
 }
 
 export const st = new PayState();
+const DEFAULTS = st.snapshot();
 
 export const won = (n: number) => `${Math.round(n).toLocaleString('ko-KR')}원`;
 export const num = (n: number) => Math.round(n).toLocaleString('ko-KR');

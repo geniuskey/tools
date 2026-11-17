@@ -63,6 +63,14 @@ test('연봉 · 금액: 실수령액 → 가족 · 자녀 → 거꾸로 → 연�
   const tsv = await page.evaluate(() => navigator.clipboard.readText());
   assert.match(tsv, /^연봉\t월 세전\t국민연금/);
   await page.screenshot({ path: `${SHOTS}/pay-table.png` });
+
+  // 저장한 값 지우기: 처음 값(연봉 4,500만 · 1명)으로
+  await page.getByRole('button', { name: '저장한 값 지우기' }).click();
+  await page.getByText('저장한 값을 지우고 처음 값으로 돌렸습니다').waitFor();
+  await page.getByRole('button', { name: '실수령액' }).click();
+  assert.equal(await hero.innerText(), '3,259,730원');
+  await page.reload({ waitUntil: 'networkidle' });
+  assert.equal(await hero.innerText(), '3,259,730원');
   assert.deepEqual(errors, []);
 });
 
