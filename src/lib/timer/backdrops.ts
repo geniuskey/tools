@@ -169,7 +169,8 @@ function water(): Draw {
 }
 
 /**
- * 모래: 샌드아트처럼 두세 곳에서 가는 줄기로 떨어져 쌓인다. 모래 한 알이 한 픽셀이고, 알마다 떨어지고 미끄러지는 것을 계산한다.
+ * 모래: 샌드아트처럼 가는 줄기로 떨어져 쌓인다. 줄기는 아주 천천히 옆으로 떠다니고, 이따금 스르르 하나가 새로 생기거나 잦아들어
+ * 둘이었다가 셋, 하나, 넷이 된다. 그래서 띠가 겹겹이 엇갈려 산의 등고선처럼 남는다. 모래 한 알이 한 픽셀이고, 알마다 떨어지고 미끄러지는 것을 계산한다.
  * (칸마다 한 알만 들어가는 모래 놀이식 계산. 움직이는 알만 따라가므로 백만 알이 쌓여도 가볍다)
  * 시간이 가면 모래의 색이 바뀌어서 쌓인 순서대로 등고선 같은 띠가 남는다. 경고 · 초과 때 내린 모래는 그 색의 띠가 된다.
  */
@@ -203,12 +204,25 @@ function sand(): Draw {
   let rate = 0; // 한 장 (1/60초) 에 늘어나는 알 수 (부드럽게)
   let last = 0;
 
-  // 줄기가 떨어지는 자리 (칸), 칸마다 가장 가까운 줄기까지의 거리, 줄기마다 봉우리의 높이 (y)
-  let spouts: number[] = [];
-  let home: number[] = []; // 처음 뽑은 자리. 시간을 넘기면 줄기가 골짜기로 옮겨 가는데, 산을 다시 그릴 때는 여기로 돌아온다
-  let far = new Float32Array(0);
-  let tops: number[] = [];
-  let carry: number[] = []; // 줄기마다 아직 못 내보낸 알의 소수점 아래
+  /** 줄기 하나. x 는 떨어지는 자리 (칸, 소수), top 은 그 아래 봉우리의 높이 (y) */
+  interface Jet {
+    x: number;
+    top: number;
+    /** 아직 못 내보낸 알의 소수점 아래 */
+    carry: number;
+    /** 굵기 0..1. goal 을 향해 몇 초에 걸쳐 바뀐다 (0 이 되면 사라진다) */
+    w: number;
+    goal: number;
+    /** 옆으로 떠다니는 빠르기 (칸/초) 와 그 빠르기가 향하는 값, 다음에 방향을 바꿀 때까지 남은 시간 */
+    vx: number;
+    aim: number;
+    turn: number;
+    fade: number;
+  }
+  let jets: Jet[] = [];
+  let home: number[] = []; // 처음 뽑은 자리. 산을 한 번에 다시 그릴 때는 여기서 쌓은 모양으로 그린다
+  let far = new Float32Array(0); // 칸마다 가장 가까운 처음 자리까지의 거리
+  let shift = 0; // 다음에 줄기가 늘거나 줄 때까지 남은 시간 (초)
   // 색 띠: 봉우리가 얼마나 높아지는 동안 한 색이 이어질지는 띠마다 제멋대로다 (얇은 띠, 두꺼운 띠, 가는 어두운 줄).
   // bounds[b] 는 b 번째 띠가 시작되는 알 수, bandAt[h] 는 봉우리 높이가 h 일 때의 띠
   let bands: { color: RGB; shade: number; dark: boolean }[] = [];
@@ -257,14 +271,13 @@ function sand(): Draw {
   function place() {
     const count = rnd() < 0.5 ? 2 : 3;
     for (let tries = 0; ; tries++) {
-      spouts = Array.from({ length: count }, () => Math.round(gw * (0.12 + rnd() * 0.76))).sort((a, b) => a - b);
-      if (tries > 40 || spouts.every((x, i) => i === 0 || x - spouts[i - 1] > gw * 0.2)) break;
+      home = Array.from({ length: count }, () => Math.round(gw * (0.12 + rnd() * 0.76))).sort((a, b) => a - b);
+      if (tries > 40 || home.every((x, i) => i === 0 || x - home[i - 1] > gw * 0.2)) break;
     }
-    home = [...spouts];
     far = new Float32Array(gw);
-    for (let x = 0; x < gw; x++) far[x] = Math.min(...spouts.map((sx) => Math.abs(x - sx)));
-    tops = spouts.map(() => gh);
-    carry = spouts.map(() => 0);
+    for (let x = 0; x < gw; x++) far[x] = Math.min(...home.map((sx) => Math.abs(x - sx)));
+    jets = home.map((x) => jet(x, 1));
+    shift = 4 + rnd() * 10;
     // 띠를 뽑는다: 두께는 얇은 것부터 두꺼운 것까지 고르게 흩어지고, 이따금 가는 어두운 줄이 낀다
     const unit = Math.max(6, gh * TOP * 0.03);
     bands = [];
@@ -309,8 +322,7 @@ function sand(): Draw {
   function rebuild(target: number, f: Frame) {
     // 새 순서가 시작되면 줄기 자리도 새로 뽑는다
     if (target < 200 && count > 2000) place();
-    spouts = [...home];
-    tops = spouts.map(() => gh);
+    jets = home.map((x) => jet(x, 1));
     grid.fill(EMPTY);
     px.fill(0);
     n = 0;
@@ -443,19 +455,24 @@ function sand(): Draw {
    * 한 박자에 내보내는 알 수만큼의 빠르기로 떨어뜨려서 (그리고 떨어지는 동안 빨라지지 않아서) 줄기가 끊기지 않고 이어진다.
    */
   function pour(want: number, f: Frame) {
-    const low = Math.max(...tops);
-    const open = spouts.map((_, i) => i).filter((i) => tops[i] >= low - 6 && tops[i] > ROOF);
+    const open = jets.filter((j) => j.top > ROOF && j.w > 0.02);
     if (!open.length) return;
-    const share = Math.min(want / open.length, BEAT);
-    const width = Math.ceil(share / FAST);
-    // 빠르기는 내림: 줄기의 한 줄은 늘 꽉 차고, 남는 알은 옆 칸에 붙어 내려간다
-    const v = Math.max(1, Math.floor(share / width));
+    // 굵은 줄기일수록, 봉우리가 낮을수록 많이 받는다 (높은 봉우리 위의 줄기는 가늘어진다)
+    const low = Math.max(...open.map((j) => j.top));
+    const pull = open.map((j) => j.w * Math.exp((j.top - low) / (gh * 0.06)));
+    const sum = pull.reduce((a, b) => a + b, 0);
     while (count >= bounds[band + 1]) band++;
-    for (const s of open) {
-      carry[s] += share;
-      let m = Math.floor(carry[s]);
-      carry[s] -= m;
-      const cx = spouts[s] - (width >> 1);
+    open.forEach((j, k) => {
+      // 굵기가 얇은 줄기 (막 생기거나 잦아드는) 는 한 박자에 몇 알 안 되어 끊어질 듯 가늘게 흐른다
+      const share = Math.min((want * pull[k]) / sum, BEAT * j.w);
+      if (share <= 0) return;
+      const width = Math.ceil(share / FAST);
+      // 빠르기는 내림: 줄기의 한 줄은 늘 꽉 차고, 남는 알은 옆 칸에 붙어 내려간다
+      const v = Math.max(1, Math.floor(share / width));
+      j.carry += share;
+      let m = Math.floor(j.carry);
+      j.carry -= m;
+      const cx = Math.round(j.x) - (width >> 1);
       const wide = m > v * width ? width + 1 : width;
       // 아래 줄부터 채운다: 먼저 나온 알이 먼저 움직여야 줄기 안에서 서로 길을 막지 않는다
       for (let y = v - 1; y >= 0 && m > 0; y--) {
@@ -472,38 +489,103 @@ function sand(): Draw {
           count++;
         }
       }
-    }
+    });
   }
 
   const ROOF = 24; // 봉우리가 화면 위에서 이만큼까지 차면 그 줄기는 더 내보내지 않는다
 
-  /** 시간을 넘긴 뒤: 봉우리가 화면 위에 닿은 줄기는 가장 낮은 골짜기로 옮겨 가서 남은 여백을 채운다 */
-  function wander() {
-    for (let i = 0; i < spouts.length; i++) {
-      if (tops[i] > ROOF + 4) continue;
-      let best = -1;
-      let deep = ROOF + 40; // 이보다 얕은 골짜기뿐이면 다 찬 것
-      for (let x = 4 + ((rnd() * 8) | 0); x < gw - 4; x += 8) {
-        if (spouts.some((sx, k) => k !== i && Math.abs(sx - x) < gw * 0.04)) continue;
-        let y = 0;
-        while (y < gh && grid[y * gw + x] !== REST) y += 4;
-        if (y > deep) (deep = y), (best = x);
+  const DRIFT = 0.004; // 옆으로 떠다니는 빠르기의 한도 (화면 너비/초). 화면을 가로지르는 데 몇 분이 걸린다
+  const MOST = 4; // 줄기는 많아야 넷
+
+  function jet(x: number, w: number): Jet {
+    return { x, top: gh, carry: 0, w, goal: 1, vx: 0, aim: (rnd() * 2 - 1) * DRIFT * gw, turn: 3 + rnd() * 12, fade: 2 + rnd() * 4 };
+  }
+
+  /** x 칸에서 모래 위의 첫 빈 칸 (클수록 낮다) */
+  const ground = (x: number) => {
+    let y = 0;
+    while (y < gh && grid[y * gw + x] !== REST) y += 3;
+    return y;
+  };
+
+  /**
+   * 새 줄기를 낸다. 다른 줄기와 떨어진 자리 몇 곳 가운데 가장 낮은 골짜기를 고른다.
+   * all 이면 (시간을 넘긴 뒤 봉우리가 위에 닿았을 때) 화면 전체에서 골짜기를 찾고, 다 찼으면 내지 않는다
+   */
+  function birth(all = false) {
+    const live = jets.filter((j) => j.goal > 0);
+    const gap = all ? gw * 0.04 : gw * 0.12;
+    let best = -1;
+    let deep = all ? ROOF + 40 : -1;
+    for (let k = 0; k < (all ? gw / 8 : 7); k++) {
+      const x = all ? 4 + k * 8 + ((rnd() * 8) | 0) : Math.round(gw * (0.07 + rnd() * 0.86));
+      if (x >= gw - 4 || live.some((j) => Math.abs(j.x - x) < gap)) continue;
+      const y = ground(x);
+      if (y > deep) (deep = y), (best = x);
+    }
+    if (best < 0) return false;
+    // 시간을 넘긴 뒤에는 빈 곳을 서둘러 채운다
+    jets.push(all ? { ...jet(best, 0.3), fade: 1 } : jet(best, 0));
+    return true;
+  }
+
+  /** 줄기가 천천히 옆으로 떠다니고, 이따금 하나가 생기거나 잦아든다 */
+  function drift(f: Frame) {
+    const dt = f.dt;
+    // 시간이 짧아 모래를 많이 내려야 할 때는 줄기 수가 모자라지 않게 한다
+    const need = Math.min(MOST + 1, Math.max(1, Math.ceil(rate / (BEAT * BEATS * 0.55))));
+    const live = jets.filter((j) => j.goal > 0);
+    shift -= dt;
+    if (live.length < need) {
+      if (birth()) shift = 3 + rnd() * 5;
+    } else if (shift <= 0) {
+      // 다음 변화까지의 간격도 제멋대로: 금세 또 바뀌기도, 한참 그대로이기도 하다
+      shift = 3 + 25 * rnd() ** 2;
+      const k = live.length;
+      const add = k <= need ? true : k >= MOST ? false : rnd() < (k === 1 ? 0.8 : 0.5);
+      if (add) birth();
+      else live[(rnd() * k) | 0].goal = 0;
+    }
+    for (const j of jets) {
+      const step = dt / j.fade;
+      j.w += Math.max(-step, Math.min(step, j.goal - j.w));
+      j.turn -= dt;
+      if (j.turn <= 0) {
+        // 이따금 거의 멈춰 한자리에 봉우리를 쌓는다
+        j.aim = (rnd() * 2 - 1) * DRIFT * gw * (rnd() < 0.3 ? 0.15 : 1);
+        j.turn = 5 + rnd() * 15;
       }
-      if (best < 0) continue;
-      spouts[i] = best;
-      tops[i] = Math.min(gh, deep);
-      carry[i] = 0;
+      // 다른 줄기에 너무 다가가거나 가장자리에 닿으면 돌아선다
+      for (const o of jets) {
+        const d = j.x - o.x;
+        if (o !== j && o.goal > 0 && Math.abs(d) < gw * 0.09 && Math.sign(j.aim) !== Math.sign(d)) j.aim = -j.aim || DRIFT * gw * 0.5 * Math.sign(d);
+      }
+      if (j.x < gw * 0.05) j.aim = Math.abs(j.aim);
+      if (j.x > gw * 0.95) j.aim = -Math.abs(j.aim);
+      j.vx += (j.aim - j.vx) * Math.min(1, dt * 0.3);
+      j.x = Math.max(2, Math.min(gw - 3, j.x + j.vx * dt));
+    }
+    jets = jets.filter((j) => j.goal > 0 || j.w > 0.01);
+  }
+
+  /** 시간을 넘긴 뒤: 봉우리가 화면 위에 닿은 줄기는 잦아들고, 가장 낮은 골짜기에서 새 줄기가 남은 여백을 채운다 */
+  function wander() {
+    for (const j of jets) {
+      if (j.goal === 0 || j.top > ROOF + 4) continue;
+      j.goal = 0;
+      j.fade = 1;
+      birth(true);
     }
   }
 
   /** 줄기 아래 봉우리의 높이를 따라간다 */
   function measure() {
-    for (let i = 0; i < spouts.length; i++) {
-      const x = spouts[i];
-      let y = Math.min(gh, Math.max(1, tops[i]));
+    for (const j of jets) {
+      const x = Math.round(j.x);
+      let y = Math.min(gh, Math.max(1, j.top));
       while (y > 1 && grid[(y - 1) * gw + x] === REST) y--;
       while (y < gh && grid[y * gw + x] !== REST) y++;
-      tops[i] = y;
+      j.top = y;
     }
   }
 
@@ -524,9 +606,10 @@ function sand(): Draw {
     const frames = f.dt * 60;
     if (frames > 0) rate += (Math.max(0, target - last) / frames - rate) * 0.05;
     last = target;
-    const beats = Math.min(BEATS, Math.max(1, Math.ceil(Math.max(rate, (target - count) / 90) / (BEAT * 0.8 * spouts.length))));
+    const beats = Math.min(BEATS, Math.max(1, Math.ceil(Math.max(rate, (target - count) / 90) / (BEAT * 0.8 * Math.max(0.5, jets.reduce((a, j) => a + j.w, 0))))));
     acc = Math.min(beats * 3, acc + frames * beats);
     measure();
+    if (!f.still) drift(f);
     if (f.more > 0 && now - moved > 600) {
       moved = now;
       wander();
