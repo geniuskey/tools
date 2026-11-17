@@ -38,6 +38,8 @@
   --c-unit: #d97706;
   --c-cron: #4263eb;
   --c-color: #c2255c;
+  --c-table: #a61e4d;
+  --c-pay: #7048e8;
   --app: var(--accent);
   --soft-mix: 11%;
   --line-mix: 40%;
@@ -80,6 +82,8 @@
   --c-unit: #ffb454;
   --c-cron: #a5b4fc;
   --c-color: #faa2c1;
+  --c-table: #f783ac;
+  --c-pay: #b197fc;
   --soft-mix: 20%;
   --line-mix: 55%;
   --on-app: #14151a;
@@ -120,6 +124,8 @@
     --c-unit: #ffb454;
     --c-cron: #a5b4fc;
     --c-color: #faa2c1;
+    --c-table: #f783ac;
+    --c-pay: #b197fc;
     --soft-mix: 20%;
     --line-mix: 55%;
     --on-app: #14151a;

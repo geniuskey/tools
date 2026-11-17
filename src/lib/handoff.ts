@@ -2,7 +2,7 @@
 // 내용은 같은 브라우저 안의 탭끼리만 오간다 (BroadcastChannel). 주소나 저장소에는 번호표만 남는다.
 import { replaceState } from '$app/navigation';
 
-export type Payload = { kind: 'image'; blob: Blob; name: string } | { kind: 'diff'; a: string; b: string; json: boolean };
+export type Payload = { kind: 'image'; blob: Blob; name: string } | { kind: 'diff'; a: string; b: string; json: boolean } | { kind: 'table'; text: string };
 
 const CHANNEL = 'tools:handoff';
 

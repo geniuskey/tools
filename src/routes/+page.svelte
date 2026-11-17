@@ -216,6 +216,26 @@
                 <li><span>11월 17일 (화) 9:00</span><em>3일 뒤</em></li>
               </ol>
             </div>
+          {:else if t.id === 'table'}
+            <div class="pv-table">
+              <div class="pv-grid">
+                {#each [['이름', '부서', '연봉'], ['김하늘', '개발팀', '5,200'], ['이서연', '디자인', '4,850']] as r, i (i)}
+                  {#each r as c, j (j)}<span class:h={i === 0} class:n={j === 2}>{c}</span>{/each}
+                {/each}
+              </div>
+              <i class="pv-arrow">→</i>
+              <pre class="pv-md">| 이름   | 연봉 |
+| ------ | ---: |
+| 김하늘 | 5,200 |</pre>
+              <div class="pv-fmts">{#each ['마크다운', 'HTML', 'Jira', 'SQL'] as f, i (f)}<em class:on={i === 0}>{f}</em>{/each}</div>
+            </div>
+          {:else if t.id === 'pay'}
+            <div class="pv-pay">
+              <span class="pv-q">연봉 <b>4,500만</b> · 가족 1명</span>
+              <strong>3,259,730<small>원</small></strong>
+              <div class="pv-bar"><i style:width="86.9%"></i><i style:width="4.5%"></i><i style:width="3.9%"></i><i style:width="0.9%"></i><i style:width="3.8%"></i></div>
+              <span class="pv-words">일금 일억이천삼백사십오만원정</span>
+            </div>
           {:else if t.id === 'raffle'}
             <div class="pv-raffle">
               {#each Array(14) as _, i (i)}
@@ -1289,6 +1309,131 @@
   .pv-cron em {
     font-style: normal;
     color: var(--muted);
+  }
+
+  /* 미리보기: 표 변환 */
+  .pv-table {
+    position: absolute;
+    inset: 18px 18px auto;
+    display: grid;
+    grid-template-columns: auto auto 1fr;
+    align-items: center;
+    gap: 8px;
+  }
+  .pv-grid {
+    display: grid;
+    grid-template-columns: repeat(3, auto);
+    border: 1px solid var(--border-strong);
+    border-radius: 7px;
+    overflow: hidden;
+    background: var(--surface);
+    font-size: 10.5px;
+  }
+  .pv-grid span {
+    padding: 3px 6px;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .pv-grid span.h {
+    background: var(--app-soft);
+    font-weight: 700;
+  }
+  .pv-grid span.n {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .pv-arrow {
+    font-style: normal;
+    font-weight: 800;
+    color: var(--app);
+  }
+  .pv-md {
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: 7px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 9.5px;
+    line-height: 1.5;
+    overflow: hidden;
+  }
+  .pv-fmts {
+    grid-column: 1 / -1;
+    display: flex;
+    gap: 4px;
+  }
+  .pv-fmts em {
+    padding: 2px 8px;
+    border-radius: 99px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    font-style: normal;
+    font-size: 10.5px;
+    color: var(--muted);
+  }
+  .pv-fmts em.on {
+    border-color: var(--app);
+    background: var(--app-soft);
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  /* 미리보기: 연봉 · 금액 */
+  .pv-pay {
+    position: absolute;
+    inset: 16px 26px auto;
+    display: grid;
+    gap: 5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pv-q {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .pv-q b {
+    color: var(--text);
+  }
+  .pv-pay strong {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.15;
+  }
+  .pv-pay strong small {
+    font-size: 15px;
+    color: var(--app);
+  }
+  .pv-bar {
+    display: flex;
+    height: 9px;
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .pv-bar i:nth-child(1) {
+    background: var(--app);
+  }
+  .pv-bar i:nth-child(2) {
+    background: #f59f00;
+  }
+  .pv-bar i:nth-child(3) {
+    background: #20c997;
+  }
+  .pv-bar i:nth-child(4) {
+    background: #74c0fc;
+  }
+  .pv-bar i:nth-child(5) {
+    background: #f06595;
+  }
+  .pv-words {
+    justify-self: start;
+    margin-top: 3px;
+    padding: 3px 9px;
+    border-radius: 7px;
+    border: 1px dashed var(--app-line);
+    background: var(--surface);
+    font-size: 11.5px;
+    font-weight: 650;
   }
 
   .principles {

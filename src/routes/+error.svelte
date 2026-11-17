@@ -14,6 +14,7 @@
   import { fmtRatio, ratio } from '$lib/color/contrast';
   import { base64Encode, textStats, utf8Encode } from '$lib/encode/codec';
   import { randomInt } from '$lib/raffle/core';
+  import { contract, formal } from '$lib/pay/money';
   import Logo from '$lib/ui/Logo.svelte';
   import ThemeToggle from '$lib/ui/ThemeToggle.svelte';
   import ToolDrawer from '$lib/ui/ToolDrawer.svelte';
@@ -102,6 +103,12 @@
           swatch: hex,
         };
       }),
+      attempt(() => ({
+        tool: toolById('pay'),
+        ask: `${n}만 원을 계약서에`,
+        answer: contract(BigInt(status) * 10000n),
+        note: `갖은자로는 ${formal(BigInt(status) * 10000n)} 圓整`,
+      })),
       attempt(() => {
         const s = textStats(path);
         return { tool: toolById('text'), ask: path, answer: `${s.chars}글자 · ${s.bytes}바이트`, note: s.chars > 24 ? '없는 주소치고는 꽤 깁니다' : '짧지만 없는 주소입니다', mono: true };

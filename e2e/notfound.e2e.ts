@@ -42,7 +42,8 @@ test('오타 난 주소는 가까운 도구를 짚어 준다', async () => {
   assert.match(await fact('color').innerText(), /10\.26 : 1/);
   assert.equal(await fact('text').innerText(), '10글자 · 10바이트');
   assert.match(await fact('date').innerText(), /^\d{4}년 \d+월 \d+일 \(.\)$/);
-  assert.equal(await page.locator('.fact').count(), 8);
+  assert.equal(await fact('pay').innerText(), '일금 사백사만원정');
+  assert.equal(await page.locator('.fact').count(), 9);
   await page.waitForFunction(() => document.querySelector('.clock')?.textContent?.trim() !== '0:00');
 
   await page.screenshot({ path: `${SHOTS}/404.png`, fullPage: true });
@@ -68,7 +69,7 @@ test('검색어 · 하위 주소 · 짐작할 수 없는 주소', async () => {
 
   const c = await open('/wp-admin');
   assert.equal(await c.page.locator('.guess').count(), 0);
-  assert.equal(await c.page.locator('.fact').count(), 8);
+  assert.equal(await c.page.locator('.fact').count(), 9);
   assert.deepEqual([...a.errors, ...b.errors, ...c.errors], []);
 });
 
